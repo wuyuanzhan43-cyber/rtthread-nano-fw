@@ -1,0 +1,18 @@
+# ---------------------------------------------------------------------------
+# STM32 共享驱动
+#
+# drv_pin.c / drv_serial.c / drv_spi.c / drv_common.c 是所有 STM32 系列
+# 复用的驱动。当前它们总是参与构建，因此 BSP_ST_DRIVER 是一个隐藏开关，
+# 只用于让生成头文件与代码中的条件判断保持一致。
+# ---------------------------------------------------------------------------
+menu "STM32 shared drivers"
+    depends on FW_PLATFORM_STM32F407VE
+
+config BSP_ST_DRIVER
+    bool
+    default y
+    help
+        Hidden switch: shared STM32 drivers are always built in v2.
+        It exists so generated headers and source checks agree.
+
+endmenu

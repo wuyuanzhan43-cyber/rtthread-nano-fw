@@ -1,0 +1,40 @@
+# ===========================================================================
+# Embedded Framework v2 顶层 Kconfig
+#
+# 配置入口只有一个：这一棵树。
+#   profiles/<name>/defconfig  -> 模板
+#   profiles/<name>/.config    -> 当前值
+#   profiles/<name>/generated/ -> 生成的头文件/CMake 片段
+#
+# CMake 与 Keil 都消费同一个 profile，避免两套配置漂移。
+# ===========================================================================
+mainmenu "Embedded Framework v2 Configuration"
+
+# 项目版本字符串，会出现在生成的配置摘要中；不参与条件判断。
+config FW_PROJECT_VERSION
+    string
+    default "0.2.0"
+
+# 目标平台二选一：
+#   HOST            - 在 PC 上跑单元测试，不需要 RTOS/HAL；
+#   STM32F407VE     - 真实板卡固件。
+# 平台决定后续哪些 menu 可见，以及 CMake 走哪条构建分支。
+choice
+    prompt "Target platform"
+    default FW_PLATFORM_STM32F407VE
+
+config FW_PLATFORM_HOST
+    bool "Host unit tests (no RTOS)"
+
+config FW_PLATFORM_STM32F407VE
+    bool "STM32F407VE board (RT-Thread Nano)"
+endchoice
+
+# 内核参数（调度/IPC/tick/堆）。
+source "Kconfig.kernel"
+# 自建设备框架的容量与组件开关。
+source "Kconfig.framework"
+# STM32 芯片时钟 + 共享驱动 + 逐实例 UART/SPI 开关。
+source "src/bsp/st/Kconfig"
+# 具体板卡：LED、控制台、引脚映射、LCD。
+source "src/board/stm32f407ve/Kconfig"

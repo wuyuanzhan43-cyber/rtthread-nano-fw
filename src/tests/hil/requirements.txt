@@ -1,0 +1,7 @@
+# HIL 串口测试依赖。
+#
+# 安装：
+#   python -m pip install -r src/tests/hil/requirements.txt
+#
+# pyserial 提供跨平台串口访问；Python 3.8+。
+pyserial>=3.5

@@ -1,0 +1,8 @@
+# Kconfig 工具链的 Python 依赖。
+#
+# kconfiglib 本身已经 vendor 在 tools/kconfiglib/，不需要 pip 安装。
+# 只有 Windows 的交互式 menuconfig 需要 curses：
+#   python -m pip install -r tools/requirements.txt
+#
+# sys_platform 限定只在 Windows 安装；Linux/macOS 自带 curses。
+windows-curses>=2.4; sys_platform == "win32"

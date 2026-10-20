@@ -1,0 +1,135 @@
+# ---------------------------------------------------------------------------
+# RT-Thread Nano 内核配置
+#
+# 只暴露 Nano 实际使用到的内核参数。没有 FinSH/msh、ulog、RT-Thread
+# device framework；串口/SPI/GPIO 由本项目的 fw 设备层接管。
+#
+# 生成的 rtconfig.h 中：
+#   - 布尔为 y 时定义 #define RT_xxx 1；
+#   - 布尔为 n 的 RT_* 不定义（RT-Thread 源码用 #ifdef 判断）。
+# ---------------------------------------------------------------------------
+menu "RT-Thread Nano kernel"
+    depends on FW_PLATFORM_STM32F407VE
+
+# 内核对象（线程、事件等）名字的最大长度，包含结尾 '\0'。
+# 设备名另外由 FW_DEV_NAME_MAX 限制，二者独立。
+config RT_NAME_MAX
+    int "Max kernel object name length"
+    default 8
+    range 2 16
+
+# 内存对齐字节数。Cortex-M4 上 8 字节对齐可以让 double/64 位访问
+# 满足 AAPCS 要求；本项目没有堆，主要影响线程栈对齐。
+config RT_ALIGN_SIZE
+    int
+    default 8
+
+# 优先级数量。数值越大，可用的优先级层数越多，但就绪表/查找成本略增。
+# main 线程默认优先级 10，串口事件等待在 main 中完成。
+config RT_THREAD_PRIORITY_MAX
+    int "Priority levels"
+    default 32
+    range 8 256
+
+# 每秒 tick 数。1000Hz -> 1 tick = 1ms，与 HAL 的毫秒时基一致；
+# SysTick 重装载值和 HAL_IncTick 的步长都由它推导（见 drv_common.c）。
+config RT_TICK_PER_SECOND
+    int "Ticks per second"
+    default 1000
+    range 100 1000
+
+# 使用 RT-Thread 的 main 线程启动流程：rtthread_startup 创建 main 线程，
+# 由它调用应用 main()。关闭后需要自己创建入口线程。
+config RT_USING_USER_MAIN
+    bool
+    default y
+
+# main 线程栈大小。当前 main 中只有 demo 应用和 LCD 初始化，
+# 4096 字节留有充足余量；如果加入更多局部大数组需要调大。
+config RT_MAIN_THREAD_STACK_SIZE
+    int "Main thread stack (bytes)"
+    default 4096
+    range 512 16384
+
+# main 线程优先级；数值越小优先级越高。10 低于串口事件处理，
+# 但仍高于 idle。
+config RT_MAIN_THREAD_PRIORITY
+    int "Main thread priority"
+    default 10
+    range 0 31
+
+# idle 线程栈；只运行空闲钩子/回收逻辑，512 字节足够。
+config RT_IDLE_THREAD_STACK_SIZE
+    int
+    default 512
+
+# 启用 rt_kprintf。板级提供了强 rt_hw_console_output，
+# 启动横幅和错误日志都依赖它。关闭后 rt_kprintf 变成空操作。
+config RT_USING_CONSOLE
+    bool "Enable rt_kprintf console"
+    default y
+
+# rt_kprintf 的格式化缓冲区大小；日志较长时可适当调大。
+config RT_CONSOLEBUF_SIZE
+    int
+    default 256
+
+# 内核调试检查。打开会增加断言和日志，正式固件默认关闭。
+config RT_DEBUG
+    bool "Kernel debug checks"
+    default n
+
+config RT_DEBUG_INIT
+    int
+    default 0
+
+# 栈溢出检查：在线程切换时检查栈指针/魔数。
+# 代价很小，建议保留，尤其是 main 栈较大时。
+config RT_USING_OVERFLOW_CHECK
+    bool "Stack overflow check"
+    default y
+
+# 信号量：Nano 内部以及未来驱动可能使用；当前串口用事件而非信号量，
+# 但保留它可以避免以后加组件时改内核配置。
+config RT_USING_SEMAPHORE
+    bool
+    default y
+
+# 事件：串口 RX 等待使用 rt_event（见 drv_serial.c），必须启用。
+config RT_USING_EVENT
+    bool
+    default y
+
+# 互斥量/邮箱/消息队列：当前项目不使用，关闭以节省代码。
+config RT_USING_MUTEX
+    bool "Enable mutex IPC"
+    default n
+
+config RT_USING_MAILBOX
+    bool "Enable mailbox IPC"
+    default n
+
+config RT_USING_MESSAGEQUEUE
+    bool "Enable message queue IPC"
+    default n
+
+# 动态堆：默认关闭，所有线程/事件/设备/ring 都是静态分配。
+# 打开后 board.c 会在 _ebss 与保留 MSP 栈之间初始化堆。
+config RT_USING_HEAP
+    bool "Enable dynamic heap (not recommended)"
+    default n
+    help
+        Off by default: threads, events and devices are static. If enabled,
+        board.c initializes a heap between _ebss and the reserved MSP stack.
+
+# 小内存管理算法，仅在启用堆时有意义。
+config RT_USING_SMALL_MEM
+    bool
+    depends on RT_USING_HEAP
+    default y
+
+# 静态内存池：当前未使用；需要固定块分配时再打开。
+config RT_USING_MEMPOOL
+    bool "Enable static memory pool"
+    default n
+endmenu

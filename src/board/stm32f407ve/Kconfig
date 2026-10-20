@@ -1,0 +1,426 @@
+# ---------------------------------------------------------------------------
+# STM32F407VE 板级配置
+#
+# 这里描述“板子怎么接线”，不描述芯片能力：
+#   - LED 引脚与有效电平；
+#   - 控制台选哪个 UART、波特率、中断优先级；
+#   - 每个 UART/SPI 实例的引脚与复用功能；
+#   - ST7735S LCD 的 SPI 实例、控制引脚、偏移、方向和启动画面。
+#
+# 修改这些选项后运行：
+#   python tools/fwconfig.py sync --profile f407ve
+# 即可重新生成 board_config.h；不需要改任何 C 代码。
+# genconfig.py 会检查引脚范围、UART TX/RX 同引脚、外设间引脚冲突、
+# 控制台 UART 未启用、LCD SPI 未启用、DMA 未实现等错误。
+# ---------------------------------------------------------------------------
+menu "Board: STM32F407VE"
+    depends on FW_PLATFORM_STM32F407VE
+
+# 板载 LED。默认 PE2，高电平点亮；如果你的板子是低电平点亮，
+# 把 BOARD_LED_ACTIVE_HIGH 改为 n，应用层逻辑无需修改。
+config BOARD_LED_ENABLE
+    bool "Enable LED"
+    default y
+
+config BOARD_LED_PORT
+    int "LED GPIO port (0=A .. 8=I)"
+    default 4
+    range 0 8
+
+config BOARD_LED_PIN
+    int "LED pin (0..15)"
+    default 2
+    range 0 15
+
+config BOARD_LED_ACTIVE_HIGH
+    bool "LED active high"
+    default y
+
+# 控制台 UART 三选一。
+# 被选中的 UART 必须同时打开 FW_USING_UARTn，否则 genconfig 会报错；
+# UART1 默认 PA9/PA10，UART2 默认 PD5/PD6（避开 LCD 的 PA2/PA3），
+# UART3 默认 PB10/PB11。
+choice BOARD_UART_SELECT
+    prompt "Console UART"
+    default BOARD_CONSOLE_UART1
+
+config BOARD_CONSOLE_UART1
+    bool "USART1 (PA9/PA10, AF7)"
+
+config BOARD_CONSOLE_UART2
+    bool "USART2 (PD5/PD6, AF7)"
+
+config BOARD_CONSOLE_UART3
+    bool "USART3 (PB10/PB11, AF7)"
+endchoice
+
+config BOARD_CONSOLE_UART_NUM
+    int
+    default 1 if BOARD_CONSOLE_UART1
+    default 2 if BOARD_CONSOLE_UART2
+    default 3 if BOARD_CONSOLE_UART3
+
+# 控制台及所有已启用串口的默认波特率。
+# 115200-8-N-1 是 PC 串口终端和 HIL 脚本的默认值；
+# 如果使用 HSI 16MHz 且波特率很高，注意 RC 振荡器误差。
+config BOARD_UART_BAUD
+    int "Console baud rate"
+    default 115200
+    range 1200 4000000
+
+# UART 中断优先级（0 最高，15 最低）。
+# 数值需要高于 SysTick（drv_common.c 把 SysTick 设为 0xFF），
+# 以保证串口数据能及时搬进 ring；默认 6 留有足够余量。
+config BOARD_UART_IRQ_PRIORITY
+    int "UART IRQ priority"
+    default 6
+    range 0 15
+
+# UART1: 默认 PA9(TX)/PA10(RX)，AF7。
+# 端口编号 0=A、3=D；AF 由芯片数据手册的复用功能表决定，
+# F407 的 USART1..3 常见引脚都是 AF7。
+config BOARD_UART1_TX_PORT
+    int "UART1 TX port"
+    default 0
+    range 0 8
+
+config BOARD_UART1_TX_PIN
+    int "UART1 TX pin"
+    default 9
+    range 0 15
+
+config BOARD_UART1_RX_PORT
+    int "UART1 RX port"
+    default 0
+    range 0 8
+
+config BOARD_UART1_RX_PIN
+    int "UART1 RX pin"
+    default 10
+    range 0 15
+
+config BOARD_UART1_AF
+    int "UART1 AF"
+    default 7
+    range 0 15
+
+# UART2: 默认 PD5/PD6，故意避开 ST7735S 使用的 PA2/PA3，
+# 这样 UART2 可以同时启用而不与 LCD 背光/复位冲突。
+config BOARD_UART2_TX_PORT
+    int "UART2 TX port"
+    default 3
+    range 0 8
+
+config BOARD_UART2_TX_PIN
+    int "UART2 TX pin"
+    default 5
+    range 0 15
+
+config BOARD_UART2_RX_PORT
+    int "UART2 RX port"
+    default 3
+    range 0 8
+
+config BOARD_UART2_RX_PIN
+    int "UART2 RX pin"
+    default 6
+    range 0 15
+
+config BOARD_UART2_AF
+    int "UART2 AF"
+    default 7
+    range 0 15
+
+# UART3: 默认 PB10/PB11，AF7。
+config BOARD_UART3_TX_PORT
+    int "UART3 TX port"
+    default 1
+    range 0 8
+
+config BOARD_UART3_TX_PIN
+    int "UART3 TX pin"
+    default 10
+    range 0 15
+
+config BOARD_UART3_RX_PORT
+    int "UART3 RX port"
+    default 1
+    range 0 8
+
+config BOARD_UART3_RX_PIN
+    int "UART3 RX pin"
+    default 11
+    range 0 15
+
+config BOARD_UART3_AF
+    int "UART3 AF"
+    default 7
+    range 0 15
+
+config BOARD_UART_DMA
+    bool "UART DMA (reserved, not implemented in v2 first cut)"
+    default n
+    help
+        Reserved for the DMA phase. v2 currently always uses the IT path;
+        enabling this is rejected by genconfig rather than silently ignored.
+
+# SPI1: 默认 PA5(SCK)/PA7(MOSI)，MISO 可选 PA6，AF5。
+# ST7735S 只用单向写，所以默认关闭 MISO；如果接其他从设备需要读回，
+# 打开 BOARD_SPI1_USE_MISO 即可。
+config BOARD_SPI1_SCK_PORT
+    int "SPI1 SCK port"
+    default 0
+    range 0 8
+
+config BOARD_SPI1_SCK_PIN
+    int "SPI1 SCK pin"
+    default 5
+    range 0 15
+
+config BOARD_SPI1_MOSI_PORT
+    int "SPI1 MOSI port"
+    default 0
+    range 0 8
+
+config BOARD_SPI1_MOSI_PIN
+    int "SPI1 MOSI pin"
+    default 7
+    range 0 15
+
+config BOARD_SPI1_USE_MISO
+    bool "SPI1 use MISO"
+    default n
+
+config BOARD_SPI1_MISO_PORT
+    int "SPI1 MISO port"
+    default 0
+    range 0 8
+
+config BOARD_SPI1_MISO_PIN
+    int "SPI1 MISO pin"
+    default 6
+    range 0 15
+
+config BOARD_SPI1_AF
+    int "SPI1 AF"
+    default 5
+    range 0 15
+
+config BOARD_SPI1_MAX_HZ
+    int "SPI1 max frequency"
+    default 12000000
+    range 1000000 42000000
+
+# SPI2: 默认 PB13(SCK)/PB14(MISO)/PB15(MOSI)，AF5。
+# SPI2 位于 APB1，默认打开 MISO，适合接传感器/Flash。
+config BOARD_SPI2_SCK_PORT
+    int "SPI2 SCK port"
+    default 1
+    range 0 8
+
+config BOARD_SPI2_SCK_PIN
+    int "SPI2 SCK pin"
+    default 13
+    range 0 15
+
+config BOARD_SPI2_MOSI_PORT
+    int "SPI2 MOSI port"
+    default 1
+    range 0 8
+
+config BOARD_SPI2_MOSI_PIN
+    int "SPI2 MOSI pin"
+    default 15
+    range 0 15
+
+config BOARD_SPI2_USE_MISO
+    bool "SPI2 use MISO"
+    default y
+
+config BOARD_SPI2_MISO_PORT
+    int "SPI2 MISO port"
+    default 1
+    range 0 8
+
+config BOARD_SPI2_MISO_PIN
+    int "SPI2 MISO pin"
+    default 14
+    range 0 15
+
+config BOARD_SPI2_AF
+    int "SPI2 AF"
+    default 5
+    range 0 15
+
+config BOARD_SPI2_MAX_HZ
+    int "SPI2 max frequency"
+    default 12000000
+    range 1000000 42000000
+
+# SPI3: 默认 PC10(SCK)/PC11(MISO)/PC12(MOSI)，AF6。
+config BOARD_SPI3_SCK_PORT
+    int "SPI3 SCK port"
+    default 2
+    range 0 8
+
+config BOARD_SPI3_SCK_PIN
+    int "SPI3 SCK pin"
+    default 10
+    range 0 15
+
+config BOARD_SPI3_MOSI_PORT
+    int "SPI3 MOSI port"
+    default 2
+    range 0 8
+
+config BOARD_SPI3_MOSI_PIN
+    int "SPI3 MOSI pin"
+    default 12
+    range 0 15
+
+config BOARD_SPI3_USE_MISO
+    bool "SPI3 use MISO"
+    default y
+
+config BOARD_SPI3_MISO_PORT
+    int "SPI3 MISO port"
+    default 2
+    range 0 8
+
+config BOARD_SPI3_MISO_PIN
+    int "SPI3 MISO pin"
+    default 11
+    range 0 15
+
+config BOARD_SPI3_AF
+    int "SPI3 AF"
+    default 6
+    range 0 15
+
+config BOARD_SPI3_MAX_HZ
+    int "SPI3 max frequency"
+    default 12000000
+    range 1000000 42000000
+
+# ---------------------------------------------------------------------------
+# ST7735S 128x160 LCD
+#
+# 4 线 SPI：SCL/SDA 由 BOARD_LCD_SPI_INSTANCE 指定的 spiN 提供；
+# CS/DC/RES/BL 是普通 GPIO，由 board_devices.c 在注册 pin 设备后配置。
+#
+# 不同批次面板的显存偏移可能不同；如果画面整体偏移一两个像素，
+# 调整 X_OFFSET/Y_OFFSET 即可。MADCTL 决定行列增长方向和 RGB/BGR 顺序，
+# 常见竖屏值为 0xC0。
+# ---------------------------------------------------------------------------
+config BOARD_LCD_ENABLE
+    bool "ST7735S 128x160 LCD"
+    depends on FW_USE_DISPLAY
+    default y
+
+# LCD 使用哪个 SPI 设备（1=spi1，2=spi2，3=spi3）。
+# 必须与 FW_USING_SPIn 对应；genconfig 会检查一致性。
+config BOARD_LCD_SPI_INSTANCE
+    int "LCD SPI instance (1..3)"
+    default 1
+    range 1 3
+
+config BOARD_LCD_CS_PORT
+    int "LCD CS port"
+    default 0
+    range 0 8
+
+config BOARD_LCD_CS_PIN
+    int "LCD CS pin"
+    default 4
+    range 0 15
+
+config BOARD_LCD_DC_PORT
+    int "LCD DC port"
+    default 0
+    range 0 8
+
+config BOARD_LCD_DC_PIN
+    int "LCD DC pin"
+    default 6
+    range 0 15
+
+config BOARD_LCD_RES_PORT
+    int "LCD RESET port"
+    default 0
+    range 0 8
+
+config BOARD_LCD_RES_PIN
+    int "LCD RESET pin"
+    default 3
+    range 0 15
+
+config BOARD_LCD_BL_PORT
+    int "LCD backlight port"
+    default 0
+    range 0 8
+
+config BOARD_LCD_BL_PIN
+    int "LCD backlight pin"
+    default 2
+    range 0 15
+
+config BOARD_LCD_WIDTH
+    int
+    default 128
+
+config BOARD_LCD_HEIGHT
+    int
+    default 160
+
+config BOARD_LCD_X_OFFSET
+    int "LCD X offset"
+    default 2
+    range 0 32
+
+config BOARD_LCD_Y_OFFSET
+    int "LCD Y offset"
+    default 1
+    range 0 32
+
+# MADCTL：bit7=MY、bit6=MX、bit5=MV、bit3=RGB/BGR。
+# 0xC0 表示 MY=MX=1、MV=0、RGB 顺序，常见竖屏模块默认值。
+# 如果红蓝互换，可以尝试 0xC8（BGR）；
+# 如果画面旋转/镜像，调整 MY/MX/MV 位。
+config BOARD_LCD_MADCTL
+    hex "LCD MADCTL"
+    default 0xC0
+
+config BOARD_LCD_INVERT
+    bool "Invert LCD colors"
+    default n
+
+config BOARD_LCD_BL_ACTIVE_HIGH
+    bool "LCD backlight active high"
+    default y
+
+# 启动画面三选一：
+#   Color bars - 四色横条，用于检查 SPI/窗口/颜色顺序；
+#   Avatar     - 128x160 图片，验证整屏位图传输（占 40KB Flash）；
+#   White      - 纯白，检查背光和供电。
+# LCD 关闭时该选择被忽略。
+choice BOARD_LCD_BOOT
+    prompt "Boot screen"
+    default BOARD_LCD_BOOT_IMAGE
+
+config BOARD_LCD_BOOT_BARS
+    bool "Color bars"
+
+config BOARD_LCD_BOOT_IMAGE
+    bool "Avatar image"
+
+config BOARD_LCD_BOOT_WHITE
+    bool "White diagnostic"
+endchoice
+
+config BOARD_LCD_BOOT_MODE
+    int
+    default 0 if BOARD_LCD_BOOT_BARS
+    default 1 if BOARD_LCD_BOOT_IMAGE
+    default 2 if BOARD_LCD_BOOT_WHITE
+
+endmenu

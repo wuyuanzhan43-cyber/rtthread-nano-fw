@@ -1,0 +1,118 @@
+{
+  "includes": [
+    "src/framework/include",
+    "src/framework/components/protocol/include",
+    "src/framework/components/display/include",
+    "src/framework/app/include",
+    "src/framework/app/assets",
+    "src/framework/ports/rtthread/include",
+    "src/bsp/st/driver",
+    "src/bsp/st/stm32f407",
+    "src/bsp/st/stm32f407/driver",
+    "src/board/stm32f407ve"
+  ],
+  "target_includes": [
+    "src/vendor/rt-thread-nano/include",
+    "src/vendor/rt-thread-nano/libcpu/arm/cortex-m4",
+    "src/third_party/stm32f4/hal/Inc",
+    "src/third_party/stm32f4/device/Include",
+    "src/third_party/stm32f4/cmsis/Include"
+  ],
+  "defines": [
+    "STM32F407xx",
+    "USE_HAL_DRIVER"
+  ],
+  "core_sources": [
+    "src/framework/core/dev.c",
+    "src/framework/core/serial.c",
+    "src/framework/core/pin.c",
+    "src/framework/core/spi.c",
+    "src/framework/core/display.c",
+    "src/framework/core/clock.c",
+    "src/framework/core/ring.c",
+    "src/framework/core/status.c"
+  ],
+  "protocol_sources": [
+    "src/framework/components/protocol/protocol.c"
+  ],
+  "display_sources": [
+    "src/framework/components/display/st7735s.c"
+  ],
+  "app_sources": [
+    "src/framework/app/demo_app.c"
+  ],
+  "assets_sources": [
+    "src/framework/app/assets/avatar_128x160.c"
+  ],
+  "rtport_sources": [
+    "src/framework/ports/rtthread/clock.c"
+  ],
+  "main_sources": [
+    "src/app/main.c"
+  ],
+  "host_tests": [
+    "src/tests/host/test_main.c",
+    "src/tests/host/host_devices.c"
+  ],
+  "bsp_sources": [
+    "src/bsp/st/driver/drv_common.c",
+    "src/bsp/st/driver/drv_pin.c",
+    "src/bsp/st/driver/drv_serial.c",
+    "src/bsp/st/driver/drv_spi.c",
+    "src/bsp/st/stm32f407/stm32f407_map.c",
+    "src/bsp/st/stm32f407/stm32f407_clock.c"
+  ],
+  "board_sources": [
+    "src/board/stm32f407ve/board.c",
+    "src/board/stm32f407ve/board_devices.c",
+    "src/board/stm32f407ve/board_console.c",
+    "src/board/stm32f407ve/board_irq.c"
+  ],
+  "rtt_common_sources": [
+    "src/vendor/rt-thread-nano/src/clock.c",
+    "src/vendor/rt-thread-nano/src/components.c",
+    "src/vendor/rt-thread-nano/src/cpu.c",
+    "src/vendor/rt-thread-nano/src/idle.c",
+    "src/vendor/rt-thread-nano/src/ipc.c",
+    "src/vendor/rt-thread-nano/src/irq.c",
+    "src/vendor/rt-thread-nano/src/kservice.c",
+    "src/vendor/rt-thread-nano/src/mem.c",
+    "src/vendor/rt-thread-nano/src/memheap.c",
+    "src/vendor/rt-thread-nano/src/mempool.c",
+    "src/vendor/rt-thread-nano/src/object.c",
+    "src/vendor/rt-thread-nano/src/scheduler.c",
+    "src/vendor/rt-thread-nano/src/slab.c",
+    "src/vendor/rt-thread-nano/src/thread.c",
+    "src/vendor/rt-thread-nano/src/timer.c",
+    "src/vendor/rt-thread-nano/libcpu/arm/cortex-m4/cpuport.c",
+    "src/vendor/rt-thread-nano/libcpu/arm/common/div0.c"
+  ],
+  "rtt_gcc_sources": [
+    "src/vendor/rt-thread-nano/libcpu/arm/cortex-m4/context_gcc.S"
+  ],
+  "rtt_ac5_sources": [
+    "src/vendor/rt-thread-nano/libcpu/arm/cortex-m4/context_rvds.S"
+  ],
+  "hal_sources": [
+    "src/third_party/stm32f4/hal/Src/stm32f4xx_hal.c",
+    "src/third_party/stm32f4/hal/Src/stm32f4xx_hal_cortex.c",
+    "src/third_party/stm32f4/hal/Src/stm32f4xx_hal_dma.c",
+    "src/third_party/stm32f4/hal/Src/stm32f4xx_hal_dma_ex.c",
+    "src/third_party/stm32f4/hal/Src/stm32f4xx_hal_flash.c",
+    "src/third_party/stm32f4/hal/Src/stm32f4xx_hal_flash_ex.c",
+    "src/third_party/stm32f4/hal/Src/stm32f4xx_hal_gpio.c",
+    "src/third_party/stm32f4/hal/Src/stm32f4xx_hal_pwr.c",
+    "src/third_party/stm32f4/hal/Src/stm32f4xx_hal_pwr_ex.c",
+    "src/third_party/stm32f4/hal/Src/stm32f4xx_hal_rcc.c",
+    "src/third_party/stm32f4/hal/Src/stm32f4xx_hal_rcc_ex.c",
+    "src/third_party/stm32f4/hal/Src/stm32f4xx_hal_spi.c",
+    "src/third_party/stm32f4/hal/Src/stm32f4xx_hal_uart.c",
+    "src/third_party/stm32f4/device/Source/Templates/system_stm32f4xx.c"
+  ],
+  "gcc_startup": [
+    "src/bsp/st/stm32f407/startup_stm32f407xx.s"
+  ],
+  "keil_startup": [
+    "keil/startup_stm32f407xx.s"
+  ]
+}

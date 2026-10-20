@@ -1,0 +1,81 @@
+# ---------------------------------------------------------------------------
+# 自建设备框架配置
+#
+# 这些符号最终生成到 fw_config.h（FW_*）和 fw_config.cmake（CONFIG_FW_*）。
+# 设备类的存在性由构建时的源文件决定；这里控制容量、ring 大小和
+# 组件开关。
+# ---------------------------------------------------------------------------
+menu "Framework"
+
+# 静态设备表容量。每个 serialN/spiN/pin/lcd 都占一个槽位；
+# 默认 16 足够当前 3 UART + 3 SPI + pin + lcd，并为扩展留余量。
+config FW_DEV_MAX
+    int "Max registered devices"
+    default 16
+    range 1 64
+
+# pin/serial/spi 类的编译开关。
+# 当前 v2 固定启用；保留符号是为了让生成头文件与代码中的
+# #if FW_USING_* 判断保持一致，也方便以后做裁剪。
+config FW_USING_PIN
+    bool
+    default y
+
+config FW_USING_SERIAL
+    bool
+    default y
+
+config FW_USING_SPI
+    bool
+    default y
+
+# 每个串口实例的 RX ring 大小。
+# RAM 占用 = 实例数 * (RX + TX)，例如默认 1 个 UART 为 1KB。
+# 512 字节可以容纳约 44ms 的 115200bps 数据；如果主循环可能长时间
+# 不读串口，应调大。
+config FW_SERIAL_RX_BUFSZ
+    int "Serial RX ring bytes"
+    default 512
+    range 32 4096
+
+# 每个串口实例的 TX ring 大小。
+# TX 是非阻塞短写；ring 越大，一次 write/协议回复越不容易短写。
+config FW_SERIAL_TX_BUFSZ
+    int "Serial TX ring bytes"
+    default 512
+    range 32 4096
+
+# v2 第一版无条件构建协议、demo 应用和显示组件。
+# 这些是隐藏符号（没有 prompt），不能通过 menuconfig 修改；
+# 保留它们是为了让生成头文件、CMake 和代码中的 #if 判断保持一致。
+config FW_USE_PROTOCOL
+    bool
+    default y
+    help
+        Hidden switch: the A5 5A protocol component is always built in v2.
+        It exists so generated headers, CMake and source #if checks agree.
+
+config FW_USE_DEMO_APP
+    bool
+    depends on FW_USE_PROTOCOL
+    default y
+    help
+        Hidden switch: the demo application depends on the protocol.
+        Disable both together only when replacing the application layer.
+
+config FW_USE_DISPLAY
+    bool
+    default y
+    help
+        Hidden switch: display class and ST7735S driver are built in v2.
+        BOARD_LCD_ENABLE depends on this symbol.
+
+# 预留给日志等级；当前没有代码消费，保留是为了旧 .config 仍可加载。
+config FW_LOG_LEVEL
+    int
+    default 0
+    help
+        Reserved. No v2 code reads this value yet; framework logging is
+        intentionally not part of the first cut.
+
+endmenu

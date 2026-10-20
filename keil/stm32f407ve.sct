@@ -1,0 +1,31 @@
+; ===========================================================================
+; Keil AC5 scatter file - STM32F407VET6 (512 KB Flash, 128 KB SRAM)
+;
+; 与 src/board/stm32f407ve/link.lds 的区域划分保持一致：
+;   FLASH 0x08000000 512K  向量表 + 代码 + 只读数据 + .data 初值
+;   RAM   0x20000000 128K  .data + .bss + 启动文件 STACK/HEAP + RT-Thread 静态对象
+;   CCM   0x10000000 64K   故意不用（DMA 无法访问 CCM）
+;
+; ARM 启动文件定义 Stack_Size = 0x1000（4KB）、Heap_Size = 0x200。
+; RT-Thread 使用静态线程/设备，C 库堆实际不用；
+; 保留 Heap_Size 只是满足厂商启动文件的结构。
+;
+; LR_IROM1 是加载区域（Flash），ER_IROM1 是执行区域（同地址）；
+; RW_IRAM1 承载可读写数据和零初始化数据。
+; ===========================================================================
+
+LR_IROM1 0x08000000 0x00080000 {
+  ER_IROM1 0x08000000 0x00080000 {
+    ; RESET 段必须放在最前：Cortex-M 从 Flash 起始读取 MSP 和复位向量。
+    *.o (RESET, +First)
+    ; ARM 链接器内部段（如 __main 需要的初始化信息）。
+    *(InRoot$$Sections)
+    ; 其余只读代码/常量。
+    .ANY (+RO)
+  }
+
+  RW_IRAM1 0x20000000 0x00020000 {
+    ; .data（初值从 Flash 拷贝）和 .bss（ZI，零初始化）。
+    .ANY (+RW +ZI)
+  }
+}

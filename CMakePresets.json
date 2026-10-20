@@ -1,0 +1,60 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "host-debug",
+      "displayName": "Host / GCC / Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/host-debug",
+      "cacheVariables": {
+        "FW_PROFILE": "host",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "gcc"
+      }
+    },
+    {
+      "name": "host-asan",
+      "displayName": "Host / GCC / ASan + UBSan",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/host-asan",
+      "cacheVariables": {
+        "FW_PROFILE": "host",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_C_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer"
+      }
+    },
+    {
+      "name": "f407-debug",
+      "displayName": "STM32F407VE / ARM GCC / Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/f407-debug",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/arm-none-eabi.cmake",
+      "cacheVariables": {
+        "FW_PROFILE": "f407ve",
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "f407-hse-debug",
+      "displayName": "STM32F407VE / HSE 168MHz / ARM GCC / Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/f407-hse-debug",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/arm-none-eabi.cmake",
+      "cacheVariables": {
+        "FW_PROFILE": "f407ve-hse",
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "host-debug", "configurePreset": "host-debug" },
+    { "name": "host-asan", "configurePreset": "host-asan" },
+    { "name": "f407-debug", "configurePreset": "f407-debug" },
+    { "name": "f407-hse-debug", "configurePreset": "f407-hse-debug" }
+  ],
+  "testPresets": [
+    { "name": "host-debug", "configurePreset": "host-debug", "output": { "outputOnFailure": true } },
+    { "name": "host-asan", "configurePreset": "host-asan", "output": { "outputOnFailure": true } }
+  ]
+}

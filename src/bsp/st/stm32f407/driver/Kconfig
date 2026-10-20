@@ -1,0 +1,60 @@
+# ---------------------------------------------------------------------------
+# STM32F407 逐实例外设开关
+#
+# 每个开关控制一个静态设备实例：
+#   FW_USING_UARTn=y -> 编译 serialn、USARTn_IRQHandler，并占用 ring RAM；
+#   FW_USING_SPIn=y -> 编译 spin，并配置对应 GPIO/SPI。
+#
+# 关闭的实例不占 RAM/Flash，也不会生成中断函数。
+# 新增实例的引脚/复用功能在 board/stm32f407ve/Kconfig 中配置；
+# 只要打开这里的开关，驱动就会按 Kconfig 自动注册，无需改 C 代码。
+# ---------------------------------------------------------------------------
+menu "STM32F407 drivers"
+    depends on FW_PLATFORM_STM32F407VE
+
+    menu "UART instances"
+        # 每个串口设备名固定为 serial1..serial3，与 stm32f407_map.c 一一对应。
+        config FW_USING_UART1
+            bool "Enable UART1 (serial1)"
+            default y
+            help
+                Build serial1 on USART1. Pins/AF come from BOARD_UART1_*.
+                UART1 is on APB2 and is the default console.
+
+        config FW_USING_UART2
+            bool "Enable UART2 (serial2)"
+            default n
+            help
+                Build serial2 on USART2. UART2 is on APB1 and can be used as
+                a second console or for HIL while UART1 is busy.
+
+        config FW_USING_UART3
+            bool "Enable UART3 (serial3)"
+            default n
+            help
+                Build serial3 on USART3. UART3 is on APB1.
+    endmenu
+
+    menu "SPI instances"
+        # 每个 SPI 设备名固定为 spi1..spi3。
+        config FW_USING_SPI1
+            bool "Enable SPI1 (spi1)"
+            default y
+            help
+                Build spi1 on SPI1 (APB2). The default ST7735S LCD uses SPI1
+                with PA5/PA7 and optional MISO on PA6.
+
+        config FW_USING_SPI2
+            bool "Enable SPI2 (spi2)"
+            default n
+            help
+                Build spi2 on SPI2 (APB1), default pins PB13/PB14/PB15.
+                Enable BOARD_SPI2_USE_MISO if a slave needs MISO.
+
+        config FW_USING_SPI3
+            bool "Enable SPI3 (spi3)"
+            default n
+            help
+                Build spi3 on SPI3 (APB1), default pins PC10/PC11/PC12.
+    endmenu
+endmenu
