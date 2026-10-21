@@ -59,11 +59,9 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${FW_ROOT}/Kconfig"
     "${FW_ROOT}/Kconfig.kernel"
     "${FW_ROOT}/Kconfig.framework"
-    "${FW_ROOT}/src/bsp/st/Kconfig"
-    "${FW_ROOT}/src/bsp/st/driver/Kconfig"
-    "${FW_ROOT}/src/bsp/st/stm32f407/Kconfig"
-    "${FW_ROOT}/src/bsp/st/stm32f407/driver/Kconfig"
-    "${FW_ROOT}/src/board/stm32f407ve/Kconfig")
+    "${FW_ROOT}/Kconfig.app"
+    "${FW_ROOT}/src/platform/stm32f407/Kconfig.drivers"
+    "${FW_ROOT}/src/platform/board/stm32f407ve/Kconfig.board")
 
 # 便捷目标：cmake --build ... --target menuconfig
 # 直接编辑 profiles/<profile>/.config，退出后自动 sync。
@@ -113,6 +111,7 @@ fw_manifest_list("defines" FALSE FW_DEFINES)
 fw_manifest_list("core_sources" TRUE FW_CORE_SOURCES)
 fw_manifest_list("protocol_sources" TRUE FW_PROTOCOL_SOURCES)
 fw_manifest_list("display_sources" TRUE FW_DISPLAY_SOURCES)
+fw_manifest_list("task_sources" TRUE FW_TASK_SOURCES)
 fw_manifest_list("app_sources" TRUE FW_APP_SOURCES)
 fw_manifest_list("assets_sources" TRUE FW_ASSETS_SOURCES)
 fw_manifest_list("rtport_sources" TRUE FW_RTPORT_SOURCES)
@@ -143,15 +142,22 @@ add_library(fw_display STATIC ${FW_DISPLAY_SOURCES})
 target_link_libraries(fw_display PUBLIC fw_core)
 fw_warnings(fw_display)
 
+add_library(fw_task STATIC ${FW_TASK_SOURCES})
+target_link_libraries(fw_task PUBLIC fw_core)
+fw_warnings(fw_task)
+
+add_library(fw_assets STATIC ${FW_ASSETS_SOURCES})
+fw_warnings(fw_assets)
+
 add_library(fw_app STATIC ${FW_APP_SOURCES})
-target_link_libraries(fw_app PUBLIC fw_protocol)
+target_link_libraries(fw_app PUBLIC fw_protocol fw_task fw_display fw_assets)
 fw_warnings(fw_app)
 
 # --- 平台分支 --------------------------------------------------------------
 if(CONFIG_FW_PLATFORM_HOST)
-    # Host：编译测试可执行文件 + 5 个 CTest。
+    # Host：编译测试可执行文件 + 6 个 CTest。
     add_executable(fw_v2_host_tests ${FW_HOST_TESTS})
-    target_link_libraries(fw_v2_host_tests PRIVATE fw_app fw_display fw_core)
+    target_link_libraries(fw_v2_host_tests PRIVATE fw_app fw_task fw_display fw_core)
     fw_warnings(fw_v2_host_tests)
     enable_testing()
     add_test(NAME v2_host_tests COMMAND fw_v2_host_tests)
@@ -162,7 +168,7 @@ if(CONFIG_FW_PLATFORM_HOST)
         add_test(NAME v2_profiles_check
                  COMMAND "${Python3_EXECUTABLE}" "${FW_ROOT}/tools/fwconfig.py"
                          check --all)
-        # 是否出现旧版配置路径（configs/、keil/.config 等）。
+        # 是否出现旧版配置路径或旧源码目录（configs/、旧 bsp/board 等）。
         add_test(NAME v2_config_layout_check
                  COMMAND "${Python3_EXECUTABLE}" "${FW_ROOT}/tools/fwconfig.py"
                          check-layout)
@@ -170,6 +176,10 @@ if(CONFIG_FW_PLATFORM_HOST)
         add_test(NAME v2_manifest_check
                  COMMAND "${Python3_EXECUTABLE}" "${FW_ROOT}/tools/fwconfig.py"
                          check-manifest)
+        # 第一方同名文件与旧命名残留。
+        add_test(NAME v2_hygiene_check
+                 COMMAND "${Python3_EXECUTABLE}" "${FW_ROOT}/tools/fwconfig.py"
+                         check-hygiene)
         # Keil 工程是否与 manifest 同步。
         add_test(NAME v2_keil_project_check
                  COMMAND "${Python3_EXECUTABLE}" "${FW_ROOT}/tools/fwconfig.py"

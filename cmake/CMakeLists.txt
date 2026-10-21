@@ -18,7 +18,7 @@
 include("${FW_ROOT}/cmake/third_party.cmake")
 
 # 板级目录：链接脚本 link.lds 在这里。
-set(FW_BOARD_DIR "${FW_ROOT}/src/board/stm32f407ve")
+set(FW_BOARD_DIR "${FW_ROOT}/src/platform/board/stm32f407ve")
 
 # 芯片头文件/Nano 头文件对所有固件目标可见。
 include_directories(${FW_TARGET_INCLUDE_DIRS})
@@ -45,38 +45,35 @@ fw_warnings(fw_bsp)
 target_compile_options(fw_bsp PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-Wno-variadic-macros>)
 
-# 板级装配：依赖 bsp、display（LCD）和 core。
+# 板级装配：依赖 bsp、display（LCD）、task（SysTick 采样）和 core。
 add_library(fw_board OBJECT ${FW_BOARD_SOURCES})
-target_link_libraries(fw_board PUBLIC fw_bsp fw_display fw_core)
+target_link_libraries(fw_board PUBLIC fw_bsp fw_display fw_task fw_core)
 fw_warnings(fw_board)
 target_compile_options(fw_board PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-Wno-variadic-macros>)
 
-# RT-Thread 端口：目前只有毫秒时钟适配。
+# RT-Thread 端口：毫秒时钟 + 任务管理适配。
 add_library(fw_rtport STATIC ${FW_RTPORT_SOURCES})
-target_link_libraries(fw_rtport PUBLIC rtt_kernel fw_core)
+target_link_libraries(fw_rtport PUBLIC rtt_kernel fw_task fw_core)
 fw_warnings(fw_rtport)
 target_compile_options(fw_rtport PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-Wno-variadic-macros>)
 
-# 启动图片：纯数据，没有依赖。
-add_library(fw_assets STATIC ${FW_ASSETS_SOURCES})
-fw_warnings(fw_assets)
-
-# 最终固件：main + GCC 启动文件（startup_stm32f407xx.s）。
+# 最终固件：main + GCC 启动文件（stm32f407_startup_gcc.s）。
 add_executable(fw_v2
     ${FW_MAIN_SOURCES}
     ${FW_GCC_STARTUP})
 
 target_link_libraries(fw_v2 PRIVATE
-    fw_board fw_bsp fw_rtport fw_app fw_display fw_assets fw_core rtt_kernel st_hal)
+    fw_board fw_bsp fw_rtport fw_app fw_task fw_display fw_assets fw_core
+    rtt_kernel st_hal)
 fw_warnings(fw_v2)
 target_compile_options(fw_v2 PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-Wno-variadic-macros>)
 
 # 链接参数：
 #   -mcpu/-mthumb/-mfpu/-mfloat-abi 与编译选项一致（Cortex-M4F 硬浮点）；
-#   -T link.lds 使用板级链接脚本（512KB Flash / 128KB SRAM）；
+#   -T link.lds 使用板级链接脚本，并通过 -L 找到生成的 board_memory.ld；
 #   -e entry 指定 RT-Thread 的 entry 作为入口；
 #   --gc-sections 回收未使用的函数/数据（配合 -ffunction-sections）；
 #   nano.specs + nosys.specs 使用精简 libc 并忽略未实现系统调用；
@@ -84,6 +81,7 @@ target_compile_options(fw_v2 PRIVATE
 target_link_options(fw_v2 PRIVATE
     "-mcpu=cortex-m4" "-mthumb" "-mfloat-abi=hard" "-mfpu=fpv4-sp-d16"
     "-T${FW_BOARD_DIR}/link.lds"
+    "-L${FW_GEN_DIR}"
     "-eentry"
     "-Wl,--gc-sections"
     "-Wl,--print-memory-usage"

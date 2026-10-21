@@ -34,14 +34,23 @@ try:
 except ImportError:
     sys.exit("pyserial is required: python -m pip install pyserial")
 
-# 与固件 fw/protocol.h、demo_app.h 保持一致的常量。
+# 与固件 fw/protocol.h、app_rpc.h 保持一致的常量。
 MAX_PAYLOAD = 32
 CMD_PING = 0x01
 CMD_LED_SET = 0x02
 CMD_STATUS = 0x03
 CMD_STATS = 0x04
+CMD_TASK_SUMMARY = 0x05
+CMD_TASK_DETAIL = 0x06
+CMD_TASK_CONTROL = 0x07
 EVENT_STATUS = 0x90
 REPLY = 0x80
+
+TASK_SUSPEND = 0
+TASK_RESUME = 1
+TASK_SET_PRIORITY = 2
+TASK_DETAIL_LEN = 31
+TASK_SUMMARY_LEN = 13
 
 
 def crc16(data):
@@ -177,6 +186,8 @@ def main():
     parser.add_argument("--timeout", type=float, default=5.0)
     parser.add_argument("--stats", action="store_true",
                         help="also test CMD_STATS (requires current firmware)")
+    parser.add_argument("--tasks", action="store_true",
+                        help="also test task summary/detail/control")
     args = parser.parse_args()
 
     # timeout=0.1 让 read(1) 不会无限阻塞；整体超时由 read_frame 控制。
@@ -255,6 +266,48 @@ def main():
             expect(frames >= 9, "STATS frames too small: %u" % frames)
             print("   ok (frames=%u io_errors=%u partial_timeouts=%u report_seq=%u)"
                   % (frames, io_errors, partials, payload[13]))
+
+        # 9. 可选任务健康：summary、逐索引 detail、非法索引、self-suspend 拒绝。
+        if args.tasks:
+            print("9. TASK summary/detail/control")
+            port.write(encode(CMD_TASK_SUMMARY, 11))
+            payload = wait_reply(reader, CMD_TASK_SUMMARY, 11)
+            expect(len(payload) == TASK_SUMMARY_LEN and payload[0] == 0,
+                   "bad TASK_SUMMARY reply: %r" % payload)
+            total = payload[1]
+            current = payload[6]
+            busy = int.from_bytes(payload[7:9], "little")
+            idle = int.from_bytes(payload[9:11], "little")
+            other = int.from_bytes(payload[11:13], "little")
+            expect(total >= 2, "expected at least main+rpc tasks, got %u" % total)
+            expect(current < total, "current_index %u out of %u" % (current, total))
+
+            detail = None
+            for index in range(total):
+                port.write(encode(CMD_TASK_DETAIL, 12 + index, bytes([index])))
+                item = wait_reply(reader, CMD_TASK_DETAIL, 12 + index)
+                expect(len(item) == TASK_DETAIL_LEN and item[0] == 0,
+                       "bad TASK_DETAIL[%u]: %r" % (index, item))
+                if index == current:
+                    detail = item
+
+            port.write(encode(CMD_TASK_DETAIL, 12 + total, b"\xFF"))
+            bad = wait_reply(reader, CMD_TASK_DETAIL, 12 + total)
+            expect(bad == b"\x05", "bad index status: %r" % bad)
+
+            expect(detail is not None, "current task detail missing")
+            port.write(encode(CMD_TASK_CONTROL, 13 + total,
+                              bytes([current, TASK_SUSPEND, 0])))
+            rejected = wait_reply(reader, CMD_TASK_CONTROL, 13 + total)
+            expect(rejected == b"\x06", "self-suspend should be rejected: %r" % rejected)
+
+            same_priority = detail[5]
+            port.write(encode(CMD_TASK_CONTROL, 14 + total,
+                              bytes([current, TASK_SET_PRIORITY, same_priority])))
+            controlled = wait_reply(reader, CMD_TASK_CONTROL, 14 + total)
+            expect(controlled == b"\x00", "set-priority should succeed: %r" % controlled)
+            print("   ok (total=%u current=%u busy=%u idle=%u other=%u)"
+                  % (total, current, busy, idle, other))
 
     print("PASS HIL protocol smoke test")
     return 0

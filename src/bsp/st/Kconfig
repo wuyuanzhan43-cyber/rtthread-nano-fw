@@ -1,8 +1,0 @@
-# STM32 系列配置入口。
-# 这里只负责把“共享驱动”和“具体芯片”两棵子树接进来；
-# 具体选项分别在各自目录的 Kconfig 中定义。
-
-# 共享驱动：drv_pin/drv_serial/drv_spi/drv_common 的开关。
-source "src/bsp/st/driver/Kconfig"
-# STM32F407：时钟树、UART/SPI 逐实例开关、芯片级引脚表。
-source "src/bsp/st/stm32f407/Kconfig"

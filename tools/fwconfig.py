@@ -14,8 +14,9 @@ CMake 与 Keil 都消费同一个 profile；刻意不再有 per-build .config，
     sync         确保 .config 存在，并生成 generated/
     menuconfig   打开 curses 菜单，退出后自动 sync
     check        只检查 generated/ 是否与 .config 一致
-    check-layout 拒绝旧版配置路径
+    check-layout 拒绝旧版配置路径与旧源码目录
     check-manifest 校验 project/sources.json
+    check-hygiene 校验第一方同名文件与禁用命名
     gen-keil     从 manifest + 模板生成 uVision 工程
 
 所有路径都相对于项目根目录解析，因此可以从任意工作目录调用。
@@ -149,6 +150,14 @@ def check_layout() -> int:
         ROOT / "configs",
         ROOT / "keil" / ".config",
         ROOT / "keil" / "generated",
+        # 重构前的源码目录；任何一项重新出现都说明旧布局回归。
+        ROOT / "src" / "bsp",
+        ROOT / "src" / "board",
+        ROOT / "src" / "framework" / "app",
+        ROOT / "src" / "framework" / "ports",
+        # 通用启动/console/IRQ 已下沉到 platform/stm32f407。
+        ROOT / "src" / "platform" / "board" / "stm32f407ve" / "board_console.c",
+        ROOT / "src" / "platform" / "board" / "stm32f407ve" / "board_irq.c",
     ]
     for path in forbidden:
         if path.exists():
@@ -185,12 +194,104 @@ def gen_keil(name: str, check: bool = False) -> int:
 # manifest 中被视为“源文件列表”的键。
 # includes/defines 不在这里检查覆盖性，但仍由 gen_keil 读取。
 SOURCE_KEYS = [
-    "core_sources", "protocol_sources", "display_sources", "app_sources",
+    "core_sources", "protocol_sources", "display_sources", "task_sources",
+    "app_sources",
     "assets_sources", "rtport_sources", "main_sources", "host_tests",
     "bsp_sources", "board_sources", "rtt_common_sources",
     "rtt_gcc_sources", "rtt_ac5_sources", "hal_sources",
     "gcc_startup", "keil_startup",
 ]
+
+
+# 卫生检查：第一方源码中不允许再出现的旧名字或旧路径。
+FORBIDDEN_TOKENS = [
+    "demo",
+    "fw_demo",
+    "st7735s_demo",
+    "board_boot_display",
+    "mr_board",
+    "framework/app",
+    "src/bsp",
+    "src/board",
+]
+
+# 只扫描文本文件，避免读入二进制对象/图片。
+TEXT_SUFFIXES = {
+    ".c", ".h", ".s", ".md", ".html", ".py", ".json", ".txt",
+    ".cmake", ".uvprojx", ".uvoptx", ".sct", ".lds", ".ld", ".config",
+    ".cmd", ".gitignore", ".editorconfig",
+}
+TEXT_NAMES = {"defconfig", "Kconfig", "CMakeLists.txt", "README.md",
+              ".config", ".gitignore", ".editorconfig"}
+
+
+def _is_text(path: pathlib.Path) -> bool:
+    """判断文件是否需要做文本扫描。"""
+    if path.name in TEXT_NAMES or path.name.startswith("Kconfig"):
+        return True
+    return path.suffix.lower() in TEXT_SUFFIXES
+
+
+def _first_party_paths():
+    """遍历仓库文本文件，排除 build、vendor、third_party、kconfiglib 和缓存。"""
+    skipped = {".git", "build", "vendor", "third_party", "kconfiglib", "__pycache__",
+               "Objects", "Listings"}
+    for path in ROOT.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(ROOT)
+        if any(part in skipped for part in rel.parts):
+            continue
+        if _is_text(path):
+            yield path, rel
+
+
+def check_hygiene() -> int:
+    """检查第一方同名文件与旧命名残留。
+
+    检查项：
+      1. src/ 下第一方 .c/.h/.s/Kconfig*/README.md 不允许同名；
+      2. 全仓库文本文件不允许出现 demo、旧路径或旧 API 名字。
+
+    vendor/、third_party/、tools/kconfiglib 属于外部代码，跳过。
+    """
+    errors: list[str] = []
+    basenames: dict[str, list[str]] = {}
+
+    for path in (ROOT / "src").rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(ROOT)
+        if any(part in {"vendor", "third_party", "__pycache__"} for part in rel.parts):
+            continue
+        name = path.name
+        if path.suffix.lower() in {".c", ".h", ".s"} or name.startswith("Kconfig") \
+                or name == "README.md":
+            basenames.setdefault(name, []).append(rel.as_posix())
+
+    for name, paths in sorted(basenames.items()):
+        if len(paths) > 1:
+            errors.append(f"duplicate basename {name}: {', '.join(paths)}")
+
+    for path, rel in _first_party_paths():
+        # 本文件包含 FORBIDDEN_TOKENS 定义本身，不能扫描自己。
+        if rel.as_posix() == "tools/fwconfig.py":
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        lowered = text.lower()
+        for token in FORBIDDEN_TOKENS:
+            if token.lower() in lowered:
+                errors.append(f"forbidden token '{token}': {rel.as_posix()}")
+
+    if errors:
+        for error in errors:
+            print(f"hygiene: {error}", file=sys.stderr)
+        return 1
+    print("hygiene: OK (unique basenames, no legacy names)")
+    return 0
 
 
 def check_manifest() -> int:
@@ -228,7 +329,7 @@ def check_manifest() -> int:
             all_files.add(item)
 
     # 反向检查：项目自有目录中的 .c 必须全部登记。
-    project_roots = ["src/app", "src/framework", "src/bsp", "src/board", "src/tests/host"]
+    project_roots = ["src/app", "src/framework", "src/platform", "src/tests/host"]
     for root_name in project_roots:
         root = ROOT / root_name
         if not root.is_dir():
@@ -263,8 +364,9 @@ def main(argv: list[str]) -> int:
     p_check.add_argument("--profile")
     p_check.add_argument("--all", action="store_true")
 
-    sub.add_parser("check-layout", help="reject legacy per-build/Keil config paths")
+    sub.add_parser("check-layout", help="reject legacy config and source paths")
     sub.add_parser("check-manifest", help="verify sources.json paths and coverage")
+    sub.add_parser("check-hygiene", help="reject duplicate basenames and legacy names")
 
     p_keil = sub.add_parser("gen-keil", help="generate the AC5 uVision project")
     p_keil.add_argument("--profile", required=True)
@@ -298,6 +400,9 @@ def main(argv: list[str]) -> int:
 
     if args.command == "check-manifest":
         return check_manifest()
+
+    if args.command == "check-hygiene":
+        return check_hygiene()
 
     if args.command == "gen-keil":
         return gen_keil(args.profile, args.check)

@@ -26,6 +26,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 MANIFEST = ROOT / "project" / "sources.json"
 TEMPLATE = ROOT / "keil" / "project_template.uvprojx"
 DEFAULT_OUTPUT = ROOT / "keil" / "stm32f407ve.uvprojx"
+SCATTER_TEMPLATE = ROOT / "keil" / "scatter_template.sct"
+DEFAULT_SCATTER = ROOT / "keil" / "stm32f407ve.sct"
 
 # uVision 工程里的路径分隔符。
 BS = "\\"
@@ -109,15 +111,16 @@ def render(manifest: dict, profile: str) -> str:
 
     # 分组名只影响 Keil 工程树显示；文件路径由 manifest 决定。
     groups = [
-        ("src/app", list_value(manifest, "main_sources")),
-        ("src/board/stm32f407ve", list_value(manifest, "board_sources")),
-        ("src/bsp/st", list_value(manifest, "bsp_sources")),
+        ("src/app", list_value(manifest, "main_sources") + list_value(manifest, "app_sources")),
+        ("src/app/assets", list_value(manifest, "assets_sources")),
+        ("src/platform/board/stm32f407ve", list_value(manifest, "board_sources")),
+        ("src/platform/stm32f407", list_value(manifest, "bsp_sources")),
         ("src/framework/core", list_value(manifest, "core_sources")),
         ("src/framework/components",
-         list_value(manifest, "protocol_sources") + list_value(manifest, "display_sources")),
-        ("src/framework/app",
-         list_value(manifest, "app_sources") + list_value(manifest, "assets_sources")),
-        ("src/framework/ports/rtthread", list_value(manifest, "rtport_sources")),
+         list_value(manifest, "protocol_sources")
+         + list_value(manifest, "display_sources")
+         + list_value(manifest, "task_sources")),
+        ("src/framework/port/rtthread", list_value(manifest, "rtport_sources")),
         ("src/vendor/rt-thread-nano",
          list_value(manifest, "rtt_common_sources") + list_value(manifest, "rtt_ac5_sources")),
         ("src/third_party/HAL", list_value(manifest, "hal_sources")),
@@ -158,6 +161,30 @@ def render(manifest: dict, profile: str) -> str:
     return text
 
 
+def _board_memory_value(text: str, name: str) -> int:
+    """从生成的 board_config.h 读取整型 BOARD_* 值。"""
+    match = re.search(rf"#define\s+{name}\s+(\d+)", text)
+    if match is None:
+        raise SystemExit(f"gen_keil: board_config.h is missing {name}")
+    return int(match.group(1))
+
+
+def render_scatter(profile: str) -> str:
+    """用 board_config.h 的 FLASH/RAM 大小渲染 Keil scatter。"""
+    config = ROOT / "profiles" / profile / "generated" / "board_config.h"
+    try:
+        text = config.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise SystemExit(f"gen_keil: missing {config.relative_to(ROOT)}")
+
+    flash_bytes = _board_memory_value(text, "BOARD_FLASH_SIZE_KB") * 1024
+    ram_bytes = _board_memory_value(text, "BOARD_RAM_SIZE_KB") * 1024
+    template = SCATTER_TEMPLATE.read_text(encoding="utf-8")
+    return (template
+            .replace("@FLASH_SIZE@", f"0x{flash_bytes:08X}")
+            .replace("@RAM_SIZE@", f"0x{ram_bytes:08X}"))
+
+
 def main(argv: list[str]) -> int:
     """生成或校验 uvprojx。
 
@@ -172,16 +199,23 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     expected = render(load_manifest(), args.profile)
+    scatter = render_scatter(args.profile)
     output = pathlib.Path(args.output)
+    scatter_output = DEFAULT_SCATTER
 
     if args.check:
         try:
             current = output.read_text(encoding="utf-8-sig")
-        except FileNotFoundError:
-            print(f"gen_keil: missing {output.relative_to(ROOT)}", file=sys.stderr)
+            current_scatter = scatter_output.read_text(encoding="utf-8-sig")
+        except FileNotFoundError as error:
+            print(f"gen_keil: missing {error.filename}", file=sys.stderr)
             return 1
         if current != expected:
             print(f"gen_keil: {output.relative_to(ROOT)} is stale; run tools/gen_keil.py",
+                  file=sys.stderr)
+            return 1
+        if current_scatter != scatter:
+            print(f"gen_keil: {scatter_output.relative_to(ROOT)} is stale; run tools/gen_keil.py",
                   file=sys.stderr)
             return 1
         print("gen_keil: OK")
@@ -190,7 +224,9 @@ def main(argv: list[str]) -> int:
     # uVision 工程使用 CRLF；显式指定 newline 保证跨平台生成一致。
     with output.open("w", encoding="utf-8", newline="\r\n") as handle:
         handle.write(expected)
-    print(f"gen_keil: wrote {output.relative_to(ROOT)}")
+    with scatter_output.open("w", encoding="utf-8", newline="\r\n") as handle:
+        handle.write(scatter)
+    print(f"gen_keil: wrote {output.relative_to(ROOT)} and {scatter_output.relative_to(ROOT)}")
     return 0
 
 

@@ -323,7 +323,7 @@ td code { white-space: nowrap; }
     <a href="#s08"><span>08</span>启动流程</a>
     <a href="#s09"><span>09</span>配置系统</a>
     <a href="#s10"><span>10</span>构建系统</a>
-    <a href="#s11"><span>11</span>协议与示例应用</a>
+    <a href="#s11"><span>11</span>协议与RPC 服务</a>
     <a href="#s12"><span>12</span>取舍与扩展</a>
     <a href="#s13"><span>13</span>验证与边界</a>
     <a href="#s14"><span>A</span>文件索引</a>
@@ -384,7 +384,7 @@ td code { white-space: nowrap; }
     </article>
     <article class="card">
       <h4>Board</h4>
-      <p>板级只描述“怎么接线”：<code>mr_board.h</code> 放端口/引脚/IRQ 表，Kconfig 决定启用哪些 <code>serialN</code>/<code>spiN</code>，board 只负责注册与装配。</p>
+      <p>板级只描述“怎么接线”：<code>stm32f407_pin_map.h</code> 放端口/引脚/IRQ 表，Kconfig 决定启用哪些 <code>serialN</code>/<code>spiN</code>，board 只负责注册与装配。</p>
     </article>
     <article class="card">
       <h4>Config</h4>
@@ -429,10 +429,10 @@ td code { white-space: nowrap; }
       <tbody>
         <tr><td>内核只做调度/IPC/时间</td><td>使用官方 Nano 3.1.5，关闭 FinSH、ulog、设备框架与堆</td><td><code>profiles/*/generated/rtconfig.h</code></td></tr>
         <tr><td>设备接口统一</td><td>所有设备走 <code>fw_dev_t</code> 与六个标准动作</td><td><code>src/framework/include/fw/dev.h</code></td></tr>
-        <tr><td>板级可裁剪</td><td>逐实例 <code>FW_USING_UARTn</code> / <code>FW_USING_SPIn</code></td><td><code>src/bsp/st/stm32f407/driver/Kconfig</code></td></tr>
+        <tr><td>板级可裁剪</td><td>逐实例 <code>FW_USING_UARTn</code> / <code>FW_USING_SPIn</code></td><td><code>src/platform/stm32f407/Kconfig</code></td></tr>
         <tr><td>无动态分配</td><td>静态注册表、静态 ring、静态事件对象</td><td><code>RT_USING_HEAP=n</code>，map/nm 无 malloc</td></tr>
         <tr><td>双工具链一致</td><td>单一 <code>project/sources.json</code> 驱动 CMake 与 Keil</td><td><code>check-manifest</code>、<code>gen-keil --check</code></td></tr>
-        <tr><td>逻辑可在 PC 验证</td><td>Host 假设备 + CTest，不依赖 RTOS/HAL</td><td><code>src/tests/host/</code>，5/5 通过</td></tr>
+        <tr><td>逻辑可在 PC 验证</td><td>Host 假设备 + CTest，不依赖 RTOS/HAL</td><td><code>src/tests/host/</code>，6/6 通过</td></tr>
       </tbody>
     </table>
   </div>
@@ -463,10 +463,10 @@ td code { white-space: nowrap; }
   </div>
 
   <div class="stack">
-    <div class="stack__row"><span class="stack__tag">应用</span><span class="stack__name">src/app</span><span class="stack__desc">组合根 main.c：打开设备、启动串口、绘制启动画面、运行 demo</span></div>
-    <div class="stack__row"><span class="stack__tag">框架</span><span class="stack__name">src/framework</span><span class="stack__desc">设备核心 + pin/serial/spi/display + 协议 + 示例应用；不包含 HAL</span></div>
-    <div class="stack__row"><span class="stack__tag">驱动</span><span class="stack__name">src/bsp/st/driver</span><span class="stack__desc">drv_pin / drv_serial / drv_spi：实现类 ops，直接操作 HAL</span></div>
-    <div class="stack__row"><span class="stack__tag">板级</span><span class="stack__name">src/board/stm32f407ve</span><span class="stack__desc">时钟、设备注册、console、SysTick、链接脚本</span></div>
+    <div class="stack__row"><span class="stack__tag">应用</span><span class="stack__name">src/app</span><span class="stack__desc">组合根 main.c：打开设备、启动串口、绘制启动画面、运行 RPC 服务</span></div>
+    <div class="stack__row"><span class="stack__tag">框架</span><span class="stack__name">src/framework</span><span class="stack__desc">设备核心 + pin/serial/spi/display + 协议 + RPC 服务；不包含 HAL</span></div>
+    <div class="stack__row"><span class="stack__tag">驱动</span><span class="stack__name">src/platform/stm32f407</span><span class="stack__desc">drv_pin / drv_serial / drv_spi：实现类 ops，直接操作 HAL</span></div>
+    <div class="stack__row"><span class="stack__tag">板级</span><span class="stack__name">src/platform/board/stm32f407ve</span><span class="stack__desc">时钟、设备注册、console、SysTick、链接脚本</span></div>
     <div class="stack__row"><span class="stack__tag">厂商</span><span class="stack__name">src/third_party/stm32f4</span><span class="stack__desc">HAL / CMSIS / device 最小子集</span></div>
     <div class="stack__row"><span class="stack__tag">内核</span><span class="stack__name">src/vendor/rt-thread-nano</span><span class="stack__desc">官方 Nano 3.1.5：调度、IPC、timer、kservice、libcpu</span></div>
   </div>
@@ -474,10 +474,10 @@ td code { white-space: nowrap; }
   <h3>目录结构</h3>
   <div class="tree">48.嵌入式框架设计2/
 ├─ src/                    ← 所有固件与测试源码
-│  ├─ app/main.c           组合根
-│  ├─ framework/           dev + 四个设备类 + components + ports
-│  ├─ bsp/st/              STM32 驱动与 mr_board 表
-│  ├─ board/stm32f407ve/   板级装配、Kconfig、link.lds
+│  ├─ app/                 组合根 + rpc + boot + assets
+│  ├─ framework/           include/fw + core + components + port
+│  ├─ platform/stm32f407/  STM32 驱动、映射、时钟、引脚表
+│  ├─ platform/board/stm32f407ve/  板级装配、Kconfig、link.lds
 │  ├─ tests/               host 单测 + hil 脚本
 │  ├─ third_party/stm32f4/ HAL/CMSIS/device 子集
 │  └─ vendor/rt-thread-nano/
@@ -492,10 +492,10 @@ td code { white-space: nowrap; }
 
   <h3>依赖红线</h3>
   <ul>
-    <li><code>src/framework/core</code> 与 <code>components</code> 不包含 HAL / RT-Thread 头文件；RTOS 相关能力通过函数指针注入（<code>lock/unlock</code>、<code>wait_rx</code>、<code>fw_clock_t</code>、<code>fw_delay_ms</code>）。</li>
-    <li><code>src/bsp</code> 只实现设备类 ops；它认识 HAL，但不决定“哪个 UART 是控制台”。</li>
-    <li><code>src/board</code> 只做时钟、引脚编号、实例注册；它不实现 class 语义。</li>
-    <li><code>src/app</code> 只使用 <code>fw_dev_*</code> 与 class helper，不直接访问寄存器。</li>
+    <li><code>src/framework/core</code> 与 <code>components</code> 不包含 HAL / RT-Thread 头文件；RTOS 相关能力通过函数指针注入（<code>lock/unlock</code>、<code>wait_rx</code>、<code>fw_clock_t</code>、<code>fw_delay_ms</code>），只有 <code>port/rtthread</code> 例外。</li>
+    <li><code>src/platform/stm32f407</code> 只实现设备类 ops；它认识 HAL，但不决定“哪个 UART 是控制台”。</li>
+    <li><code>src/platform/board</code> 只做时钟、引脚编号、实例注册；它不实现 class 语义，也不绘制启动画面。</li>
+    <li><code>src/app</code> 是唯一业务层：命令、上报、启动画面和图片都在这里；它只使用 <code>fw_dev_*</code> 与 class helper，不直接访问寄存器。</li>
   </ul>
 
   <div class="callout">
@@ -554,7 +554,7 @@ typedef struct fw_dev {
   <p>设备数量在十几个量级，线性查找比哈希表更简单，也不需要动态内存。名字会先归一化：<code>"serial1"</code> 与 <code>/dev/serial1"</code> 指向同一个设备。</p>
 
   <figure class="code">
-    <div class="code__bar"><span class="code__path">src/framework/core/dev.c · fw_dev_register</span><button class="copy" type="button">复制</button></div>
+    <div class="code__bar"><span class="code__path">src/framework/core/fw_dev.c · fw_dev_register</span><button class="copy" type="button">复制</button></div>
     <pre><code>if (dev == NULL || drv == NULL ||
     !normalize(name, normalized, sizeof(normalized)))
     return FW_EINVAL;
@@ -575,7 +575,7 @@ return FW_OK;</code></pre>
 
   <h3>打开：只在 0 → 1 时调用类的 open</h3>
   <figure class="code">
-    <div class="code__bar"><span class="code__path">src/framework/core/dev.c · fw_dev_open</span><button class="copy" type="button">复制</button></div>
+    <div class="code__bar"><span class="code__path">src/framework/core/fw_dev.c · fw_dev_open</span><button class="copy" type="button">复制</button></div>
     <pre><code>if (dev == NULL || dev-&gt;ops == NULL) return FW_EINVAL;
 
 if (dev-&gt;ref_count == 0U &amp;&amp; dev-&gt;ops-&gt;open != NULL) {
@@ -632,10 +632,10 @@ FW_CONTAINER_OF(dev, fw_serial_t, dev)
  */</code></pre>
   </figure>
 
-  <p>驱动用位运算拆出端口下标和引脚掩码，再查 <code>mr_board.h</code> 的两张表；引脚号本身不依赖 HAL 的寄存器布局。</p>
+  <p>驱动用位运算拆出端口下标和引脚掩码，再查 <code>stm32f407_pin_map.h</code> 的两张表；引脚号本身不依赖 HAL 的寄存器布局。</p>
 
   <figure class="code">
-    <div class="code__bar"><span class="code__path">src/bsp/st/driver/drv_pin.c</span><button class="copy" type="button">复制</button></div>
+    <div class="code__bar"><span class="code__path">src/platform/stm32f407/drv_pin.c</span><button class="copy" type="button">复制</button></div>
     <pre><code>static GPIO_TypeDef *pin_port(int number)
 {
     int index = (number &gt;&gt; 4) &amp; 0x0f;
@@ -676,7 +676,7 @@ int level = fw_pin_read(pin, led);   /* 返回 0/1 */</code></pre>
   </div>
 
   <div class="callout">
-    <span class="callout__label">mr_board.h 的角色</span>
+    <span class="callout__label">stm32f407_pin_map.h 的角色</span>
     <p><code>DRV_PIN_PORT_CONFIG</code>、<code>DRV_PIN_CONFIG</code>、<code>DRV_PIN_IRQ_MAP_CONFIG</code> 是编译期表。板级移植时改这张头文件即可；驱动不关心具体是 A..E 还是 A..I。</p>
   </div>
 </section>
@@ -734,7 +734,7 @@ int level = fw_pin_read(pin, led);   /* 返回 0/1 */</code></pre>
   </div>
 
   <figure class="code">
-    <div class="code__bar"><span class="code__path">src/framework/core/serial.c · serial_read</span><button class="copy" type="button">复制</button></div>
+    <div class="code__bar"><span class="code__path">src/framework/core/fw_serial.c · serial_read</span><button class="copy" type="button">复制</button></div>
     <pre><code>for (;;) {
     int level = serial_lock(dev);
 
@@ -769,7 +769,7 @@ int level = fw_pin_read(pin, led);   /* 返回 0/1 */</code></pre>
 
   <h3>中断处理体</h3>
   <figure class="code">
-    <div class="code__bar"><span class="code__path">src/bsp/st/driver/drv_serial.c · drv_serial_irq_handler</span><button class="copy" type="button">复制</button></div>
+    <div class="code__bar"><span class="code__path">src/platform/stm32f407/drv_serial.c · drv_serial_irq_handler</span><button class="copy" type="button">复制</button></div>
     <pre><code>sr = serial-&gt;instance-&gt;SR;
 
 have_byte = (sr &amp; USART_SR_RXNE) != 0U;
@@ -796,7 +796,7 @@ if (wake) (void)rt_event_send(&amp;serial-&gt;rx_event, 1U);</code></pre>
   <p><code>fw_dev_write</code> 只把数据放进 TX ring，然后按需打开 TXE 中断。实际逐字节发送由 ISR 完成；ring 空时 ISR 关闭 TXE。</p>
 
   <figure class="code">
-    <div class="code__bar"><span class="code__path">src/framework/core/serial.c · serial_write</span><button class="copy" type="button">复制</button></div>
+    <div class="code__bar"><span class="code__path">src/framework/core/fw_serial.c · serial_write</span><button class="copy" type="button">复制</button></div>
     <pre><code>level = serial_lock(dev);
 count = fw_ring_write(&amp;serial-&gt;wr_fifo, (const uint8_t *)buf, size);
 serial_unlock(dev, level);
@@ -810,7 +810,7 @@ return (int)count;   /* 可能小于 size：调用者需要重试 */</code></pre
   <div class="duo">
     <article class="card">
       <h4>返回值语义</h4>
-      <p><code>write</code> 返回“已进入 ring 的字节数”。短写不是错误，而是背压；demo_app 用 <code>tx_offset</code> 记录进度，下一轮继续发送剩余部分。</p>
+      <p><code>write</code> 返回“已进入 ring 的字节数”。短写不是错误，而是背压；app_rpc 用 <code>tx_offset</code> 记录进度，下一轮继续发送剩余部分。</p>
     </article>
     <article class="card">
       <h4>错误语义</h4>
@@ -820,7 +820,7 @@ return (int)count;   /* 可能小于 size：调用者需要重试 */</code></pre
 
   <h3>临界区注入：core 不依赖 RTOS</h3>
   <figure class="code">
-    <div class="code__bar"><span class="code__path">src/bsp/st/driver/drv_serial.c · lock/unlock</span><button class="copy" type="button">复制</button></div>
+    <div class="code__bar"><span class="code__path">src/platform/stm32f407/drv_serial.c · lock/unlock</span><button class="copy" type="button">复制</button></div>
     <pre><code>static int serial_lock(fw_dev_t *dev)
 {
     (void)dev;
@@ -839,7 +839,7 @@ static void serial_unlock(fw_dev_t *dev, int level)
   <p><code>rt_kprintf</code> 启动早期没有中断和调度器，只能轮询 USART 寄存器；串口 start 之后改为把字符串放进 TX ring，非阻塞返回。</p>
 
   <figure class="code">
-    <div class="code__bar"><span class="code__path">src/board/stm32f407ve/board_console.c</span><button class="copy" type="button">复制</button></div>
+    <div class="code__bar"><span class="code__path">src/platform/stm32f407/stm32f407_console.c</span><button class="copy" type="button">复制</button></div>
     <pre><code>if (console-&gt;started) {
     fw_dev_t *dev = &amp;console-&gt;base.dev;
     (void)fw_dev_write(dev, 0, (const uint8_t *)str, length, FW_NO_WAIT);
@@ -868,7 +868,7 @@ static void serial_unlock(fw_dev_t *dev, int level)
   <p>SPI 是同步总线，没有 ring 和中断事件。类层保存配置并转发同步传输；驱动用 HAL 的 Transmit / Receive / TransmitReceive 完成一次事务。片选由具体外设通过 pin 设备控制，SPI 类不涉及。</p>
 
   <figure class="code">
-    <div class="code__bar"><span class="code__path">src/framework/core/spi.c · fw_spi_transfer</span><button class="copy" type="button">复制</button></div>
+    <div class="code__bar"><span class="code__path">src/framework/core/fw_spi.c · fw_spi_transfer</span><button class="copy" type="button">复制</button></div>
     <pre><code>const fw_spi_ops_t *ops = spi_ops(dev);
 if (ops == NULL || ops-&gt;transfer == NULL) return FW_ENOTSUP;
 if (length == 0U) return 0;
@@ -893,7 +893,7 @@ return ops-&gt;transfer(dev, tx, rx, length, timeout_ms);</code></pre>
   </div>
 
   <figure class="code">
-    <div class="code__bar"><span class="code__path">src/framework/core/display.c · 分块填充</span><button class="copy" type="button">复制</button></div>
+    <div class="code__bar"><span class="code__path">src/framework/core/fw_display.c · 分块填充</span><button class="copy" type="button">复制</button></div>
     <pre><code>clip_rect(display, &amp;x, &amp;y, &amp;width, &amp;height);
 if (width == 0U || height == 0U) return FW_OK;
 
@@ -933,7 +933,50 @@ while (remaining != 0U &amp;&amp; result == FW_OK) {
   <p>面板驱动不直接操作 HAL；它通过 <code>fw_spi_transfer</code> 和 <code>fw_pin_write</code> 工作，因此可以在 Host 上用假设备验证裁剪/分块逻辑。</p>
 
   <h3>启动画面</h3>
-  <p><code>board_boot_display()</code> 先调用 <code>fw_display_setup()</code> 执行面板初始化，再按 Kconfig 选择四色横条、头像图片或纯白诊断。头像是一张 128×160 RGB565 常量表，占 40KB Flash；选择其他模式时可由链接器回收。</p>
+  <p><code>app_boot_display()</code>（位于 <code>src/app/boot/app_boot.c</code>）先调用 <code>fw_display_setup()</code> 执行面板初始化，再按 <code>APP_BOOT_MODE</code> 选择四色横条、头像图片或纯白诊断。头像是一张 128×160 RGB565 常量表，占 40KB Flash；选择其他模式时可由链接器回收。</p>
+</section>
+
+<!-- ======================= 06b TASK ======================= -->
+<section class="section" id="s06b">
+  <div class="section__head">
+    <div class="section__num">06b</div>
+    <div>
+      <h2>任务管理与健康度</h2>
+      <p class="section__kicker">main 监督，rpc 工作；栈、CPU、状态和心跳都可在运行时查询。</p>
+    </div>
+  </div>
+
+  <h3>线程模型</h3>
+  <p><code>main</code> 只做设备/任务初始化，然后进入监督循环；<code>app_rpc</code> 是独立的静态任务，
+  独占串口并每轮调用 <code>fw_task_heartbeat_self()</code>；<code>idle</code> 只参与 CPU idle 统计。
+  RPC 任务等待上限为 500ms，避免心跳饥饿。</p>
+
+  <h3>健康度</h3>
+  <p>框架用静态任务表记录每个任务；port 通过扫描 RT-Thread 预填的 <code>'#'</code> 估算栈高水位，
+  SysTick 在 <code>rt_tick_increase</code> 前按当前/idle/other 归桶计算 CPU。
+  健康等级为 OK/WARN/LOST，异常原因包括栈低、心跳 warn、心跳 lost 和线程关闭。</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>指标</th><th>来源</th><th>判定</th></tr></thead>
+      <tbody>
+        <tr><td>栈</td><td>port 快照 + <code>'#'</code> 扫描</td><td>剩余 &lt; 阈值 → WARN</td></tr>
+        <tr><td>CPU</td><td>SysTick tick 桶</td><td>窗口内每任务/总占用千分比</td></tr>
+        <tr><td>状态</td><td><code>rt_thread->stat</code></td><td>INIT/READY/RUNNING/SUSPENDED/CLOSED</td></tr>
+        <tr><td>心跳</td><td><code>fw_task_heartbeat_self</code></td><td>warn 1.5s / lost 3s</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>挂起与恢复</h3>
+  <p>RT-Thread 的 <code>rt_thread_suspend()</code> 只接受 READY 线程，因此 suspend 只置
+  <code>suspend_pending</code>，目标任务在下一次 heartbeat 时自行挂起；resume 只接受
+  <code>user_suspended</code> 的任务。main 不可控，异常不自动重启。</p>
+
+  <h3>运行时查看</h3>
+  <p><code>0x05</code> 返回总数、ok/warn/lost、worst/current 索引和 busy/idle/other；
+  <code>0x06</code> 按索引返回状态、栈、CPU、心跳；<code>0x07</code> 执行
+  suspend/resume/set_priority。单帧 payload 上限 32 字节，详情固定 31 字节。</p>
 </section>
 
 <!-- ======================= 07 ======================= -->
@@ -946,9 +989,9 @@ while (remaining != 0U &amp;&amp; result == FW_OK) {
     </div>
   </div>
 
-  <h3>mr_board.h：编译期引脚表</h3>
+  <h3>stm32f407_pin_map.h：编译期引脚表</h3>
   <figure class="code">
-    <div class="code__bar"><span class="code__path">src/bsp/st/stm32f407/driver/mr_board.h</span><button class="copy" type="button">复制</button></div>
+    <div class="code__bar"><span class="code__path">src/platform/stm32f407/stm32f407_pin_map.h</span><button class="copy" type="button">复制</button></div>
     <pre><code>#define DRV_PIN_PORT_CONFIG { GPIOA, GPIOB, GPIOC, GPIOD, GPIOE }
 
 #define DRV_PIN_CONFIG {                       \
@@ -970,7 +1013,7 @@ while (remaining != 0U &amp;&amp; result == FW_OK) {
 
   <h3>逐实例生成：Kconfig 直接决定注册代码</h3>
   <figure class="code">
-    <div class="code__bar"><span class="code__path">src/bsp/st/driver/drv_serial.c</span><button class="copy" type="button">复制</button></div>
+    <div class="code__bar"><span class="code__path">src/platform/stm32f407/drv_serial.c</span><button class="copy" type="button">复制</button></div>
     <pre><code>#if defined(FW_USING_UART1) &amp;&amp; FW_USING_UART1
 static drv_serial_t serial1;
 #endif
@@ -1040,36 +1083,34 @@ fw_status_t drv_serial_register_all(void)
     <div class="flow__step"><div class="flow__n">1</div><div class="flow__body"><strong>Reset_Handler</strong><span>启动文件从 Flash 读取初始 MSP 和复位向量，初始化 .data/.bss。</span></div></div>
     <div class="flow__step"><div class="flow__n">2</div><div class="flow__body"><strong>SystemInit</strong><span>启动文件内的基础时钟设置；随后进入 RT-Thread 的 <code>entry</code>。</span></div></div>
     <div class="flow__step"><div class="flow__n">3</div><div class="flow__body"><strong>rtthread_startup</strong><span>初始化内核对象、调度器、timer，然后调用 <code>rt_hw_board_init()</code>。</span></div></div>
-    <div class="flow__step"><div class="flow__n">4</div><div class="flow__body"><strong>rt_hw_board_init</strong><span>HAL_Init → 时钟 → SysTick → 延时钩子 → <code>board_devices_init()</code>。</span></div></div>
-    <div class="flow__step"><div class="flow__n">5</div><div class="flow__body"><strong>board_devices_init</strong><span>注册 pin / serial / spi / lcd；UART 中断仍未打开。</span></div></div>
-    <div class="flow__step"><div class="flow__n">6</div><div class="flow__body"><strong>main</strong><span>open 控制台 serial → <code>board_console_start()</code> 打开中断 → LCD 初始化 → demo 主循环。</span></div></div>
+    <div class="flow__step"><div class="flow__n">4</div><div class="flow__body"><strong>rt_hw_board_init</strong><span><code>stm32f407_boot_init(board_clock_config())</code>：HAL/时钟/SysTick/heap/复位原因；然后 <code>board_devices_init()</code>。</span></div></div>
+    <div class="flow__step"><div class="flow__n">5</div><div class="flow__body"><strong>board_devices_init</strong><span>先 <code>board_pins_validate()</code>，再注册 pin / serial / spi / lcd 并绑定控制台；UART 中断仍未打开。</span></div></div>
+    <div class="flow__step"><div class="flow__n">6</div><div class="flow__body"><strong>main</strong><span>open 控制台 serial → <code>board_serial_start_all()</code> → LCD 初始化 → app_tasks_init/start → 健康监督循环；RPC 在独立 rpc 任务中运行。</span></div></div>
   </div>
 
   <figure class="code">
-    <div class="code__bar"><span class="code__path">src/board/stm32f407ve/board.c · rt_hw_board_init</span><button class="copy" type="button">复制</button></div>
-    <pre><code>HAL_Init();
-HAL_NVIC_SetPriorityGrouping(NVIC_PRIORITYGROUP_4);
-if (stm32f407_clock_init() != FW_OK) board_panic(__FILE__, __LINE__);
-rt_hw_systick_init();
-fw_clock_set_delay_fn(board_delay_ms);
-
-#ifdef RT_USING_HEAP
-    rt_system_heap_init(&amp;_ebss,
-                        (void *)((uintptr_t)&amp;_estack - BOARD_MSP_RESERVE));
+    <div class="code__bar"><span class="code__path">src/platform/board/stm32f407ve/board.c · rt_hw_board_init</span><button class="copy" type="button">复制</button></div>
+    <pre><code>void rt_hw_board_init(void)
+{
+    if (stm32f407_boot_init(board_clock_config()) != FW_OK)
+        stm32f407_panic(__FILE__, __LINE__);
+    if (board_devices_init() != FW_OK)
+        stm32f407_panic(__FILE__, __LINE__);
+#ifdef RT_USING_COMPONENTS_INIT
+    rt_components_board_init();
 #endif
-
-result = board_devices_init();
-if (result != FW_OK) board_panic(__FILE__, __LINE__);</code></pre>
+}</code></pre>
   </figure>
 
   <h3>一个 SysTick，两套时间</h3>
   <p>HAL 与 RT-Thread 都想要 SysTick。这里统一由 <code>rt_hw_systick_init()</code> 按 <code>RT_TICK_PER_SECOND</code> 配置重装载值，<code>SysTick_Handler</code> 同时调用 <code>HAL_IncTick()</code> 和 <code>rt_tick_increase()</code>。</p>
 
   <figure class="code">
-    <div class="code__bar"><span class="code__path">src/board/stm32f407ve/board_irq.c</span><button class="copy" type="button">复制</button></div>
+    <div class="code__bar"><span class="code__path">src/platform/stm32f407/stm32f407_irq.c</span><button class="copy" type="button">复制</button></div>
     <pre><code>void SysTick_Handler(void)
 {
     rt_interrupt_enter();
+    fw_task_cpu_tick();
     HAL_IncTick();
     rt_tick_increase();
     rt_interrupt_leave();
@@ -1079,11 +1120,11 @@ if (result != FW_OK) board_panic(__FILE__, __LINE__);</code></pre>
   <p><code>HAL_IncTick</code> 按 <code>systick_ms = 1000 / RT_TICK_PER_SECOND</code> 累加，保证 uwTick 始终以毫秒为单位；即使把 tick 改成 100Hz，HAL 时间也不会变成 10ms 粒度。</p>
 
   <h3>延时钩子</h3>
-  <p><code>board_delay_ms</code> 被安装为 <code>fw_delay_ms</code> 的实现：调度器已启动且不在中断中时使用 <code>rt_thread_mdelay</code>，否则用 SysTick 忙等。这样 ST7735S 驱动可以调用 <code>fw_delay_ms</code>，而 framework 不需要包含 <code>rtthread.h</code>。</p>
+  <p><code>stm32f407_delay_ms</code> 被安装为 <code>fw_delay_ms</code> 的实现：调度器已启动且不在中断中时使用 <code>rt_thread_mdelay</code>，否则用 SysTick 忙等。这样 ST7735S 驱动可以调用 <code>fw_delay_ms</code>，而 framework 不需要包含 <code>rtthread.h</code>。</p>
 
   <div class="callout callout--warn">
     <span class="callout__label">失败就停机</span>
-    <p>时钟或设备注册失败会调用 <code>board_panic</code>：关中断、保存文件名/行号、原地空转。启动阶段还没有可用的控制台，保留现场给调试器是唯一可靠的诊断方式。</p>
+    <p>时钟或设备注册失败会调用 <code>stm32f407_panic</code>：关中断、保存文件名/行号、原地空转。启动阶段还没有可用的控制台，保留现场给调试器是唯一可靠的诊断方式。</p>
   </div>
 </section>
 
@@ -1101,20 +1142,17 @@ if (result != FW_OK) board_panic(__FILE__, __LINE__);</code></pre>
   <div class="objectmap">Kconfig                       顶层：平台二选一 + source
 ├─ Kconfig.kernel             RT_NAME_MAX / TICK / IPC / HEAP ...
 ├─ Kconfig.framework          FW_DEV_MAX / ring 大小 / 组件开关
-└─ src/bsp/st/Kconfig
-   ├─ driver/Kconfig          共享驱动开关
-   └─ stm32f407/Kconfig       时钟源
-      └─ driver/Kconfig       FW_USING_UART1..3 / SPI1..3
-
-src/board/stm32f407ve/Kconfig
-   LED / console / UART 引脚 / SPI 引脚 / LCD 全部板级选项</div>
+├─ Kconfig.app                启动画面等应用层选项
+├─ src/platform/stm32f407/Kconfig.drivers   FW_USING_UART1..3 / SPI1..3
+└─ src/platform/board/stm32f407ve/Kconfig.board
+   时钟 / 板卡信息 / 内存 / LED / console / UART/SPI/LCD 板级选项</div>
 
   <h3>profile 布局</h3>
   <div class="tree">profiles/
 ├─ host/
 │  ├─ defconfig          模板：Host 单元测试
 │  ├─ .config            当前值
-│  └─ generated/         rtconfig.h · board_config.h · fw_config.h ...
+│  └─ generated/         rtconfig.h · board_config.h · fw_config.h · app_config.h ...
 ├─ f407ve/               默认 HSI 16MHz + UART1 + SPI1 + LCD
 └─ f407ve-hse/           HSE 8MHz -> 168MHz</div>
 
@@ -1125,7 +1163,9 @@ src/board/stm32f407ve/Kconfig
       <tbody>
         <tr><td><code>rtconfig.h</code></td><td>RT-Thread Nano</td><td>RT_* 内核参数；false 的布尔不定义</td></tr>
         <tr><td><code>board_config.h</code></td><td>BSP / board</td><td>BOARD_* 时钟、引脚、LCD、控制台</td></tr>
-        <tr><td><code>fw_config.h</code></td><td>framework / app</td><td>FW_* 容量、实例开关、ring 大小</td></tr>
+        <tr><td><code>fw_config.h</code></td><td>framework</td><td>FW_* 容量、实例开关、ring 大小</td></tr>
+        <tr><td><code>app_config.h</code></td><td>app</td><td>APP_* 启动画面等应用层选项</td></tr>
+        <tr><td><code>board_memory.ld</code></td><td>GCC / Keil</td><td>Flash/RAM/CCM/最小栈，链接与 scatter 共用</td></tr>
         <tr><td><code>fw_config.cmake</code></td><td>CMake</td><td>CONFIG_* 变量，用于选择平台分支</td></tr>
         <tr><td><code>config_summary.txt</code></td><td>人</td><td>便于 diff / 审查的配置摘要</td></tr>
       </tbody>
@@ -1219,7 +1259,8 @@ src/board/stm32f407ve/Kconfig
         <tr><td><code>fw_core</code></td><td>STATIC</td><td>dev / pin / serial / spi / display / ring / status / clock</td></tr>
         <tr><td><code>fw_protocol</code></td><td>STATIC</td><td>A5 5A 帧与 CRC</td></tr>
         <tr><td><code>fw_display</code></td><td>STATIC</td><td>ST7735S 面板驱动</td></tr>
-        <tr><td><code>fw_app</code></td><td>STATIC</td><td>demo 命令分发与 TX 泵</td></tr>
+        <tr><td><code>fw_task</code></td><td>STATIC</td><td>任务表、健康度、CPU 窗口</td></tr>
+        <tr><td><code>fw_app</code></td><td>STATIC</td><td>RPC 命令分发与 TX 泵</td></tr>
         <tr><td><code>rtt_kernel</code></td><td>STATIC</td><td>Nano 内核（GCC 版本）</td></tr>
         <tr><td><code>st_hal</code></td><td>STATIC</td><td>STM32F4 HAL/CMSIS 子集</td></tr>
         <tr><td><code>fw_bsp</code> / <code>fw_board</code></td><td>OBJECT</td><td>驱动与板级；OBJECT 保留强符号覆盖</td></tr>
@@ -1263,10 +1304,11 @@ python tools/fwconfig.py gen-keil --profile f407ve</code></pre>
     <table>
       <thead><tr><th>测试</th><th>覆盖内容</th></tr></thead>
       <tbody>
-        <tr><td><code>v2_host_tests</code></td><td>ring 环绕、协议字节、设备注册/引用计数、短写、显示裁剪、demo 命令/上报/超时/背压</td></tr>
+        <tr><td><code>v2_host_tests</code></td><td>ring、协议、设备/类、显示裁剪、RPC 命令/上报/背压、任务健康/CPU/控制</td></tr>
         <tr><td><code>v2_profiles_check</code></td><td>generated/ 与 .config 一致</td></tr>
         <tr><td><code>v2_config_layout_check</code></td><td>不存在旧版 configs/、keil/.config、per-build .config</td></tr>
         <tr><td><code>v2_manifest_check</code></td><td>manifest 文件存在、无重复、src 下 .c 全覆盖</td></tr>
+        <tr><td><code>v2_hygiene_check</code></td><td>第一方同名文件、示例式命名/旧路径残留</td></tr>
         <tr><td><code>v2_keil_project_check</code></td><td>生成的 uvprojx 与 manifest 同步</td></tr>
       </tbody>
     </table>
@@ -1274,7 +1316,7 @@ python tools/fwconfig.py gen-keil --profile f407ve</code></pre>
 
   <div class="callout">
     <span class="callout__label">为什么 Host 测试能跑固件逻辑</span>
-    <p>framework/core、components 和 demo_app 都不包含 HAL/RTOS 头文件；Host 测试用假 serial/pin/display 驱动真实设备核心。被替换的只有最底层寄存器和 RTOS 事件。</p>
+    <p>framework/core、components 和 app_rpc 都不包含 HAL/RTOS 头文件；Host 测试用假 serial/pin/display 和 fake task port 驱动真实设备/任务核心。被替换的只有最底层寄存器、RTOS 事件和线程操作。</p>
   </div>
 </section>
 
@@ -1283,7 +1325,7 @@ python tools/fwconfig.py gen-keil --profile f407ve</code></pre>
   <div class="section__head">
     <div class="section__num">11</div>
     <div>
-      <h2>协议与示例应用</h2>
+      <h2>协议与RPC 服务</h2>
       <p class="section__kicker">逐字节状态机 + 非阻塞 TX 泵，演示完整的设备层使用方式。</p>
     </div>
   </div>
@@ -1305,6 +1347,9 @@ python tools/fwconfig.py gen-keil --profile f407ve</code></pre>
         <tr><td><code>0x02</code> LED_SET</td><td>请求/回复</td><td>1 字节 0/1</td><td><code>00</code></td></tr>
         <tr><td><code>0x03</code> STATUS</td><td>请求/回复</td><td>空</td><td><code>00 known state</code></td></tr>
         <tr><td><code>0x04</code> STATS</td><td>请求/回复</td><td>空</td><td><code>00 frames io_errors partial_timeouts report_seq</code></td></tr>
+        <tr><td><code>0x05</code> TASK_SUMMARY</td><td>请求/回复</td><td>空</td><td><code>00 total ok warn lost worst current busy idle other</code></td></tr>
+        <tr><td><code>0x06</code> TASK_DETAIL</td><td>请求/回复</td><td>index</td><td><code>00 state health reasons priority name stack cpu heartbeat</code></td></tr>
+        <tr><td><code>0x07</code> TASK_CONTROL</td><td>请求/回复</td><td>index/action/value</td><td><code>status</code></td></tr>
         <tr><td><code>0x90</code> STATUS</td><td>主动上报</td><td>—</td><td><code>00 known state</code></td></tr>
       </tbody>
     </table>
@@ -1312,7 +1357,7 @@ python tools/fwconfig.py gen-keil --profile f407ve</code></pre>
 
   <h3>解析状态机</h3>
   <figure class="code">
-    <div class="code__bar"><span class="code__path">src/framework/components/protocol/protocol.c</span><button class="copy" type="button">复制</button></div>
+    <div class="code__bar"><span class="code__path">src/framework/components/protocol/fw_protocol.c</span><button class="copy" type="button">复制</button></div>
     <pre><code>enum { SEEK_A5, SEEK_5A, READ_LENGTH, READ_BODY, READ_CRC_LO, READ_CRC_HI };
 
 /* READ_LENGTH: 拒绝超过 32 字节的帧 */
@@ -1330,22 +1375,25 @@ if (parser-&gt;used == (size_t)parser-&gt;body[0] + 3U) {
 
   <p>解析器每个字节只做一次状态判断，不需要先攒够整帧；非法长度或 CRC 错误只计数并重新寻找前导码，不会卡死。若错误字节本身是 <code>0xA5</code>，会把它当作下一帧前导码继续，避免漏掉紧邻的合法帧。</p>
 
-  <h3>demo 主循环</h3>
+  <h3>RPC 任务循环</h3>
   <figure class="code">
-    <div class="code__bar"><span class="code__path">src/app/main.c</span><button class="copy" type="button">复制</button></div>
+    <div class="code__bar"><span class="code__path">src/app/task/app_task.c</span><button class="copy" type="button">复制</button></div>
     <pre><code>for (;;) {
-    uint32_t wait;
-    (void)fw_demo_poll(&amp;application);
-    wait = fw_demo_next_wait_ms(&amp;application);
-    if (wait == FW_DEMO_WAIT_FOREVER) wait = 1000U;
-    (void)fw_serial_wait_rx(config.serial, wait);
+    fw_task_heartbeat_self(&amp;s_tasks);
+    (void)app_rpc_poll(rpc);
+    wait = app_rpc_next_wait_ms(rpc);
+    if (wait == APP_RPC_WAIT_FOREVER || wait &gt; APP_RPC_LOOP_WAIT_MAX_MS)
+        wait = APP_RPC_LOOP_WAIT_MAX_MS;
+    (void)fw_serial_wait_rx(rpc-&gt;serial, wait);
 }</code></pre>
   </figure>
 
-  <p><code>fw_demo_next_wait_ms</code> 返回三个约束的最小值：未发完的 TX（1ms）、周期上报剩余时间、半帧超时剩余时间。没有定时任务时返回 <code>FW_DEMO_WAIT_FOREVER</code>，主循环最多睡 1 秒作为心跳。</p>
+  <p><code>app_rpc_next_wait_ms</code> 返回未发完的 TX、周期上报和半帧超时的最小值；
+  RPC 任务再把它 clamp 到 500ms，保证心跳年龄远小于 warn 阈值。main 不再处理 RPC，
+  只负责初始化、创建任务和周期调用 <code>fw_task_refresh</code>。</p>
 
   <figure class="code">
-    <div class="code__bar"><span class="code__path">src/framework/app/demo_app.c · fw_demo_poll</span><button class="copy" type="button">复制</button></div>
+    <div class="code__bar"><span class="code__path">src/app/rpc/app_rpc.c · app_rpc_poll</span><button class="copy" type="button">复制</button></div>
     <pre><code>if (app-&gt;tx_length != 0U) return flush_tx(app);
 
 for (budget = 0U; budget &lt; app-&gt;rx_budget; ++budget) {
@@ -1376,7 +1424,7 @@ for (budget = 0U; budget &lt; app-&gt;rx_budget; ++budget) {
   </div>
 
   <h3>HIL 脚本</h3>
-  <p><code>src/tests/hil/test_protocol.py</code> 通过 USB-UART 与真实板卡交互，覆盖主动上报、PING、LED/STATUS、未知命令、非法参数、噪声恢复、分片帧和可选 STATS。</p>
+  <p><code>src/tests/hil/test_protocol.py</code> 通过 USB-UART 与真实板卡交互，覆盖主动上报、PING、LED/STATUS、未知命令、非法参数、噪声恢复、分片帧、可选 STATS，以及 <code>--tasks</code> 时的任务摘要/详情/self-suspend 拒绝。</p>
   <figure class="code">
     <div class="code__bar"><span class="code__path">HIL</span><button class="copy" type="button">复制</button></div>
     <pre><code>python -m pip install -r src/tests/hil/requirements.txt
@@ -1415,8 +1463,8 @@ python src/tests/hil/test_protocol.py --port COM7 --stats</code></pre>
   <ol>
     <li>在 <code>src/framework/include/fw/</code> 定义类型令牌、ops、设备结构体和公开 API；</li>
     <li>在 <code>src/framework/core/</code> 实现类包装：只做参数校验、状态保存和 ops 转发，不包含 HAL；</li>
-    <li>在 <code>src/bsp/st/driver/</code> 实现具体芯片 ops；</li>
-    <li>在 <code>src/board/</code> 或设备自己的注册函数中创建静态实例并注册；</li>
+    <li>在 <code>src/platform/stm32f407/</code> 实现具体芯片 ops；</li>
+    <li>在 <code>src/platform/board/</code> 或设备自己的注册函数中创建静态实例并注册；</li>
     <li>把新源文件加入 <code>project/sources.json</code>，运行 <code>check-manifest</code> 与 <code>gen-keil</code>；</li>
     <li>在 <code>src/tests/host/</code> 加一个假设备，覆盖 open/read/write/ioctl 和错误路径。</li>
   </ol>
@@ -1450,21 +1498,21 @@ python src/tests/hil/test_protocol.py --port COM7 --stats</code></pre>
   </div>
 
   <div class="kpi">
-    <div class="kpi__item"><div class="kpi__v">5/5</div><div class="kpi__k">Host CTest</div></div>
-    <div class="kpi__item"><div class="kpi__v">0 / 0</div><div class="kpi__k">Keil AC5 Error / Warning</div></div>
-    <div class="kpi__item"><div class="kpi__v">82,388 B</div><div class="kpi__k">F407 HSI Flash</div></div>
+    <div class="kpi__item"><div class="kpi__v">6/6</div><div class="kpi__k">Host CTest</div></div>
+    <div class="kpi__item"><div class="kpi__v">待复验</div><div class="kpi__k">Keil AC5（工程已重新生成）</div></div>
+    <div class="kpi__item"><div class="kpi__v">95,436 B</div><div class="kpi__k">F407 HSI Flash</div></div>
   </div>
 
   <div class="table-wrap">
     <table>
       <thead><tr><th>检查</th><th>结果</th><th>说明</th></tr></thead>
       <tbody>
-        <tr><td>Host 单元测试</td><td>5/5 通过</td><td>ring、协议、设备表、serial/pin/display、demo</td></tr>
-        <tr><td>F407 HSI（GCC 14）</td><td>Flash 82,388 B / RAM 10,864 B</td><td><code>cmake --preset f407-debug</code></td></tr>
-        <tr><td>F407 HSE（GCC 14）</td><td>Flash 82,484 B / RAM 10,864 B</td><td><code>cmake --preset f407-hse-debug</code></td></tr>
-        <tr><td>Keil AC5</td><td>0 Error / 0 Warning</td><td>Code 27,900 · RO 42,076 · RW 164 · ZI 11,276</td></tr>
+        <tr><td>Host 单元测试</td><td>6/6 通过</td><td>ring、协议、设备表、serial/pin/display、RPC、任务健康</td></tr>
+        <tr><td>F407 HSI（GCC 14）</td><td>Flash 95,436 B / RAM 14,896 B</td><td><code>cmake --preset f407-debug</code></td></tr>
+        <tr><td>F407 HSE（GCC 14）</td><td>Flash 95,436 B / RAM 14,896 B</td><td><code>cmake --preset f407-hse-debug</code></td></tr>
+        <tr><td>Keil AC5</td><td>待 UV4 复验</td><td>工程和 scatter 已由 manifest/board_config 重新生成</td></tr>
         <tr><td>配置一致性</td><td>3 个 profile 全部 OK</td><td><code>fwconfig.py check --all</code></td></tr>
-        <tr><td>布局/manifest</td><td>OK（61 项）</td><td>无旧路径；src 下 .c 全部登记</td></tr>
+        <tr><td>布局/manifest</td><td>OK（73 项）</td><td>无旧路径；src 下 .c 全部登记</td></tr>
       </tbody>
     </table>
   </div>
@@ -1498,24 +1546,32 @@ python src/tests/hil/test_protocol.py --port COM7 --stats</code></pre>
     <table>
       <thead><tr><th>路径</th><th>职责</th></tr></thead>
       <tbody>
-        <tr><td><code>src/app/main.c</code></td><td>组合根：设备 open、控制台启动、LCD、demo 主循环</td></tr>
+        <tr><td><code>src/app/main.c</code></td><td>组合根 + 健康监督循环</td></tr>
+        <tr><td><code>src/app/task/app_task.c</code></td><td>adopt main、创建/启动 RPC 任务</td></tr>
+        <tr><td><code>src/framework/components/task/fw_task.c</code></td><td>任务表、健康度、CPU 窗口</td></tr>
+        <tr><td><code>src/framework/port/rtthread/rtthread_task.c</code></td><td>RT-Thread 静态线程端口</td></tr>
         <tr><td><code>src/framework/include/fw/dev.h</code></td><td>设备基类、ops、drv、统一 API</td></tr>
-        <tr><td><code>src/framework/core/dev.c</code></td><td>静态注册表、路径归一化、引用计数、分发</td></tr>
-        <tr><td><code>src/framework/core/pin.c</code></td><td>pin 类：多引脚读写、模式配置</td></tr>
-        <tr><td><code>src/framework/core/serial.c</code></td><td>serial 类：ring、read/write/ioctl、ISR 事件</td></tr>
-        <tr><td><code>src/framework/core/spi.c</code></td><td>SPI 类：配置与同步传输转发</td></tr>
-        <tr><td><code>src/framework/core/display.c</code></td><td>display 类：裁剪、分块填充、位图</td></tr>
-        <tr><td><code>src/framework/components/protocol/protocol.c</code></td><td>CRC-16 与逐字节组帧</td></tr>
+        <tr><td><code>src/framework/core/fw_dev.c</code></td><td>静态注册表、路径归一化、引用计数、分发</td></tr>
+        <tr><td><code>src/framework/core/fw_pin.c</code></td><td>pin 类：多引脚读写、模式配置</td></tr>
+        <tr><td><code>src/framework/core/fw_serial.c</code></td><td>serial 类：ring、read/write/ioctl、ISR 事件</td></tr>
+        <tr><td><code>src/framework/core/fw_spi.c</code></td><td>SPI 类：配置与同步传输转发</td></tr>
+        <tr><td><code>src/framework/core/fw_display.c</code></td><td>display 类：裁剪、分块填充、位图</td></tr>
+        <tr><td><code>src/framework/components/protocol/fw_protocol.c</code></td><td>CRC-16 与逐字节组帧</td></tr>
         <tr><td><code>src/framework/components/display/st7735s.c</code></td><td>ST7735S 命令序列与像素搬运</td></tr>
-        <tr><td><code>src/framework/app/demo_app.c</code></td><td>命令表、TX 泵、周期上报、半帧超时</td></tr>
-        <tr><td><code>src/bsp/st/driver/drv_serial.c</code></td><td>UART 实例、HAL、IRQ、事件</td></tr>
-        <tr><td><code>src/bsp/st/driver/drv_pin.c</code></td><td>单 pin 设备与 GPIO 表查表</td></tr>
-        <tr><td><code>src/bsp/st/driver/drv_spi.c</code></td><td>SPI 实例、引脚复用、分频</td></tr>
-        <tr><td><code>src/bsp/st/stm32f407/driver/mr_board.h</code></td><td>端口/引脚/IRQ/实例映射表</td></tr>
-        <tr><td><code>src/board/stm32f407ve/board.c</code></td><td>HAL、时钟、SysTick、设备注册入口</td></tr>
-        <tr><td><code>src/board/stm32f407ve/board_devices.c</code></td><td>注册顺序、LED/LCD 引脚、启动画面</td></tr>
-        <tr><td><code>src/board/stm32f407ve/board_console.c</code></td><td>控制台轮询/入队双模式</td></tr>
-        <tr><td><code>src/board/stm32f407ve/link.lds</code></td><td>GCC 链接脚本（512K Flash / 128K RAM）</td></tr>
+        <tr><td><code>src/app/rpc/app_rpc.c</code></td><td>命令表、TX 泵、周期上报、半帧超时</td></tr>
+        <tr><td><code>src/platform/stm32f407/drv_serial.c</code></td><td>UART 实例、HAL、IRQ、事件</td></tr>
+        <tr><td><code>src/platform/stm32f407/drv_pin.c</code></td><td>单 pin 设备与 GPIO 表查表</td></tr>
+        <tr><td><code>src/platform/stm32f407/drv_spi.c</code></td><td>SPI 实例、引脚复用、分频</td></tr>
+        <tr><td><code>src/platform/stm32f407/stm32f407_pin_map.h</code></td><td>端口/引脚/IRQ/实例映射表</td></tr>
+        <tr><td><code>src/platform/stm32f407/stm32f407_boot.c</code></td><td>HAL/时钟/SysTick/heap/复位原因</td></tr>
+        <tr><td><code>src/platform/stm32f407/stm32f407_console.c</code></td><td>控制台轮询/入队双模式</td></tr>
+        <tr><td><code>src/platform/stm32f407/stm32f407_irq.c</code></td><td>SysTick + CPU 采样</td></tr>
+        <tr><td><code>src/platform/stm32f407/stm32f407_panic.c</code></td><td>panic 现场</td></tr>
+        <tr><td><code>src/platform/board/stm32f407ve/board.c</code></td><td>薄组合根：boot → devices → components</td></tr>
+        <tr><td><code>src/platform/board/stm32f407ve/board_clock.c</code></td><td>HSI/HSE 板级时钟描述</td></tr>
+        <tr><td><code>src/platform/board/stm32f407ve/board_pins.c</code></td><td>串口/SPI 描述符与引脚/AF 校验</td></tr>
+        <tr><td><code>src/platform/board/stm32f407ve/board_devices.c</code></td><td>注册顺序、LED/LCD、console 绑定</td></tr>
+        <tr><td><code>src/platform/board/stm32f407ve/link.lds</code></td><td>GCC 链接脚本，包含 board_memory.ld</td></tr>
         <tr><td><code>profiles/</code></td><td>唯一配置源与生成物</td></tr>
         <tr><td><code>project/sources.json</code></td><td>CMake/Keil 共用源文件清单</td></tr>
         <tr><td><code>tools/fwconfig.py</code></td><td>profile 管理、检查、Keil 生成入口</td></tr>

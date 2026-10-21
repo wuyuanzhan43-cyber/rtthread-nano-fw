@@ -49,7 +49,7 @@
             <InvalidFlash>1</InvalidFlash>
           </TargetStatus>
           <OutputDirectory>..\build\keil\</OutputDirectory>
-          <OutputName>fw_nano</OutputName>
+          <OutputName>fw_v2</OutputName>
           <CreateExecutable>1</CreateExecutable>
           <CreateLib>0</CreateLib>
           <CreateHexFile>1</CreateHexFile>
@@ -340,7 +340,7 @@
               <MiscControls></MiscControls>
               <Define>STM32F407xx;USE_HAL_DRIVER</Define>
               <Undefine></Undefine>
-              <IncludePath>..\profiles\f407ve\generated;..\src\framework\include;..\src\framework\components\protocol\include;..\src\framework\components\display\include;..\src\framework\app\include;..\src\framework\app\assets;..\src\framework\ports\rtthread\include;..\src\bsp\st\driver;..\src\bsp\st\stm32f407;..\src\bsp\st\stm32f407\driver;..\src\board\stm32f407ve;..\src\vendor\rt-thread-nano\include;..\src\vendor\rt-thread-nano\libcpu\arm\cortex-m4;..\src\third_party\stm32f4\hal\Inc;..\src\third_party\stm32f4\device\Include;..\src\third_party\stm32f4\cmsis\Include</IncludePath>
+              <IncludePath>..\profiles\f407ve\generated;..\src\framework\include;..\src\app\include;..\src\platform\stm32f407;..\src\platform\board\stm32f407ve;..\src\vendor\rt-thread-nano\include;..\src\vendor\rt-thread-nano\libcpu\arm\cortex-m4;..\src\third_party\stm32f4\hal\Inc;..\src\third_party\stm32f4\device\Include;..\src\third_party\stm32f4\cmsis\Include</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -389,65 +389,110 @@
               <FileType>1</FileType>
               <FilePath>..\src\app\main.c</FilePath>
             </File>
+            <File>
+              <FileName>app_task.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\app\task\app_task.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_rpc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\app\rpc\app_rpc.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_boot.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\app\boot\app_boot.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
-          <GroupName>src/board/stm32f407ve</GroupName>
+          <GroupName>src/app/assets</GroupName>
+          <Files>
+            <File>
+              <FileName>avatar_128x160.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\app\assets\avatar_128x160.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>src/platform/board/stm32f407ve</GroupName>
           <Files>
             <File>
               <FileName>board.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\board\stm32f407ve\board.c</FilePath>
+              <FilePath>..\src\platform\board\stm32f407ve\board.c</FilePath>
             </File>
             <File>
               <FileName>board_devices.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\board\stm32f407ve\board_devices.c</FilePath>
+              <FilePath>..\src\platform\board\stm32f407ve\board_devices.c</FilePath>
             </File>
             <File>
-              <FileName>board_console.c</FileName>
+              <FileName>board_clock.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\board\stm32f407ve\board_console.c</FilePath>
+              <FilePath>..\src\platform\board\stm32f407ve\board_clock.c</FilePath>
             </File>
             <File>
-              <FileName>board_irq.c</FileName>
+              <FileName>board_pins.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\board\stm32f407ve\board_irq.c</FilePath>
+              <FilePath>..\src\platform\board\stm32f407ve\board_pins.c</FilePath>
             </File>
           </Files>
         </Group>
         <Group>
-          <GroupName>src/bsp/st</GroupName>
+          <GroupName>src/platform/stm32f407</GroupName>
           <Files>
             <File>
               <FileName>drv_common.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\bsp\st\driver\drv_common.c</FilePath>
+              <FilePath>..\src\platform\stm32f407\drv_common.c</FilePath>
             </File>
             <File>
               <FileName>drv_pin.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\bsp\st\driver\drv_pin.c</FilePath>
+              <FilePath>..\src\platform\stm32f407\drv_pin.c</FilePath>
             </File>
             <File>
               <FileName>drv_serial.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\bsp\st\driver\drv_serial.c</FilePath>
+              <FilePath>..\src\platform\stm32f407\drv_serial.c</FilePath>
             </File>
             <File>
               <FileName>drv_spi.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\bsp\st\driver\drv_spi.c</FilePath>
+              <FilePath>..\src\platform\stm32f407\drv_spi.c</FilePath>
             </File>
             <File>
               <FileName>stm32f407_map.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\bsp\st\stm32f407\stm32f407_map.c</FilePath>
+              <FilePath>..\src\platform\stm32f407\stm32f407_map.c</FilePath>
             </File>
             <File>
               <FileName>stm32f407_clock.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\bsp\st\stm32f407\stm32f407_clock.c</FilePath>
+              <FilePath>..\src\platform\stm32f407\stm32f407_clock.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32f407_boot.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\platform\stm32f407\stm32f407_boot.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32f407_irq.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\platform\stm32f407\stm32f407_irq.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32f407_console.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\platform\stm32f407\stm32f407_console.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32f407_panic.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\platform\stm32f407\stm32f407_panic.c</FilePath>
             </File>
           </Files>
         </Group>
@@ -455,44 +500,44 @@
           <GroupName>src/framework/core</GroupName>
           <Files>
             <File>
-              <FileName>dev.c</FileName>
+              <FileName>fw_dev.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\framework\core\dev.c</FilePath>
+              <FilePath>..\src\framework\core\fw_dev.c</FilePath>
             </File>
             <File>
-              <FileName>serial.c</FileName>
+              <FileName>fw_serial.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\framework\core\serial.c</FilePath>
+              <FilePath>..\src\framework\core\fw_serial.c</FilePath>
             </File>
             <File>
-              <FileName>pin.c</FileName>
+              <FileName>fw_pin.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\framework\core\pin.c</FilePath>
+              <FilePath>..\src\framework\core\fw_pin.c</FilePath>
             </File>
             <File>
-              <FileName>spi.c</FileName>
+              <FileName>fw_spi.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\framework\core\spi.c</FilePath>
+              <FilePath>..\src\framework\core\fw_spi.c</FilePath>
             </File>
             <File>
-              <FileName>display.c</FileName>
+              <FileName>fw_display.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\framework\core\display.c</FilePath>
+              <FilePath>..\src\framework\core\fw_display.c</FilePath>
             </File>
             <File>
-              <FileName>clock.c</FileName>
+              <FileName>fw_clock.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\framework\core\clock.c</FilePath>
+              <FilePath>..\src\framework\core\fw_clock.c</FilePath>
             </File>
             <File>
-              <FileName>ring.c</FileName>
+              <FileName>fw_ring.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\framework\core\ring.c</FilePath>
+              <FilePath>..\src\framework\core\fw_ring.c</FilePath>
             </File>
             <File>
-              <FileName>status.c</FileName>
+              <FileName>fw_status.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\framework\core\status.c</FilePath>
+              <FilePath>..\src\framework\core\fw_status.c</FilePath>
             </File>
           </Files>
         </Group>
@@ -500,39 +545,34 @@
           <GroupName>src/framework/components</GroupName>
           <Files>
             <File>
-              <FileName>protocol.c</FileName>
+              <FileName>fw_protocol.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\framework\components\protocol\protocol.c</FilePath>
+              <FilePath>..\src\framework\components\protocol\fw_protocol.c</FilePath>
             </File>
             <File>
               <FileName>st7735s.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\src\framework\components\display\st7735s.c</FilePath>
             </File>
-          </Files>
-        </Group>
-        <Group>
-          <GroupName>src/framework/app</GroupName>
-          <Files>
             <File>
-              <FileName>demo_app.c</FileName>
+              <FileName>fw_task.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\framework\app\demo_app.c</FilePath>
-            </File>
-            <File>
-              <FileName>avatar_128x160.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\src\framework\app\assets\avatar_128x160.c</FilePath>
+              <FilePath>..\src\framework\components\task\fw_task.c</FilePath>
             </File>
           </Files>
         </Group>
         <Group>
-          <GroupName>src/framework/ports/rtthread</GroupName>
+          <GroupName>src/framework/port/rtthread</GroupName>
           <Files>
             <File>
-              <FileName>clock.c</FileName>
+              <FileName>rtthread_clock.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\src\framework\ports\rtthread\clock.c</FilePath>
+              <FilePath>..\src\framework\port\rtthread\rtthread_clock.c</FilePath>
+            </File>
+            <File>
+              <FileName>rtthread_task.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\framework\port\rtthread\rtthread_task.c</FilePath>
             </File>
           </Files>
         </Group>

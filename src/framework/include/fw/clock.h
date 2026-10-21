@@ -14,7 +14,7 @@
  * 依赖：stdint.h。
  *
  * 为什么需要这层适配：
- *   demo_app 需要周期性上报和半帧超时判断，但它不应该知道
+ *   app_rpc 需要周期性上报和半帧超时判断，但它不应该知道
  *   rt_tick_get() 或 RT_TICK_PER_SECOND。通过 fw_clock_t 注入，
  *   Host 测试可以传入假时钟，精确控制时间推进，不依赖真实延时。
  */

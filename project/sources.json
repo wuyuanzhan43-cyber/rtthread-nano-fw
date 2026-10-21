@@ -1,15 +1,9 @@
 {
   "includes": [
     "src/framework/include",
-    "src/framework/components/protocol/include",
-    "src/framework/components/display/include",
-    "src/framework/app/include",
-    "src/framework/app/assets",
-    "src/framework/ports/rtthread/include",
-    "src/bsp/st/driver",
-    "src/bsp/st/stm32f407",
-    "src/bsp/st/stm32f407/driver",
-    "src/board/stm32f407ve"
+    "src/app/include",
+    "src/platform/stm32f407",
+    "src/platform/board/stm32f407ve"
   ],
   "target_includes": [
     "src/vendor/rt-thread-nano/include",
@@ -23,50 +17,64 @@
     "USE_HAL_DRIVER"
   ],
   "core_sources": [
-    "src/framework/core/dev.c",
-    "src/framework/core/serial.c",
-    "src/framework/core/pin.c",
-    "src/framework/core/spi.c",
-    "src/framework/core/display.c",
-    "src/framework/core/clock.c",
-    "src/framework/core/ring.c",
-    "src/framework/core/status.c"
+    "src/framework/core/fw_dev.c",
+    "src/framework/core/fw_serial.c",
+    "src/framework/core/fw_pin.c",
+    "src/framework/core/fw_spi.c",
+    "src/framework/core/fw_display.c",
+    "src/framework/core/fw_clock.c",
+    "src/framework/core/fw_ring.c",
+    "src/framework/core/fw_status.c"
   ],
   "protocol_sources": [
-    "src/framework/components/protocol/protocol.c"
+    "src/framework/components/protocol/fw_protocol.c"
   ],
   "display_sources": [
     "src/framework/components/display/st7735s.c"
   ],
+  "task_sources": [
+    "src/framework/components/task/fw_task.c"
+  ],
   "app_sources": [
-    "src/framework/app/demo_app.c"
+    "src/app/rpc/app_rpc.c",
+    "src/app/boot/app_boot.c"
   ],
   "assets_sources": [
-    "src/framework/app/assets/avatar_128x160.c"
+    "src/app/assets/avatar_128x160.c"
   ],
   "rtport_sources": [
-    "src/framework/ports/rtthread/clock.c"
+    "src/framework/port/rtthread/rtthread_clock.c",
+    "src/framework/port/rtthread/rtthread_task.c"
   ],
   "main_sources": [
-    "src/app/main.c"
+    "src/app/main.c",
+    "src/app/task/app_task.c"
   ],
   "host_tests": [
     "src/tests/host/test_main.c",
-    "src/tests/host/host_devices.c"
+    "src/tests/host/test_framework.c",
+    "src/tests/host/test_task.c",
+    "src/tests/host/test_app_rpc.c",
+    "src/tests/host/host_devices.c",
+    "src/tests/host/host_tasks.c"
   ],
   "bsp_sources": [
-    "src/bsp/st/driver/drv_common.c",
-    "src/bsp/st/driver/drv_pin.c",
-    "src/bsp/st/driver/drv_serial.c",
-    "src/bsp/st/driver/drv_spi.c",
-    "src/bsp/st/stm32f407/stm32f407_map.c",
-    "src/bsp/st/stm32f407/stm32f407_clock.c"
+    "src/platform/stm32f407/drv_common.c",
+    "src/platform/stm32f407/drv_pin.c",
+    "src/platform/stm32f407/drv_serial.c",
+    "src/platform/stm32f407/drv_spi.c",
+    "src/platform/stm32f407/stm32f407_map.c",
+    "src/platform/stm32f407/stm32f407_clock.c",
+    "src/platform/stm32f407/stm32f407_boot.c",
+    "src/platform/stm32f407/stm32f407_irq.c",
+    "src/platform/stm32f407/stm32f407_console.c",
+    "src/platform/stm32f407/stm32f407_panic.c"
   ],
   "board_sources": [
-    "src/board/stm32f407ve/board.c",
-    "src/board/stm32f407ve/board_devices.c",
-    "src/board/stm32f407ve/board_console.c",
-    "src/board/stm32f407ve/board_irq.c"
+    "src/platform/board/stm32f407ve/board.c",
+    "src/platform/board/stm32f407ve/board_devices.c",
+    "src/platform/board/stm32f407ve/board_clock.c",
+    "src/platform/board/stm32f407ve/board_pins.c"
   ],
   "rtt_common_sources": [
     "src/vendor/rt-thread-nano/src/clock.c",
@@ -110,7 +118,7 @@
     "src/third_party/stm32f4/device/Source/Templates/system_stm32f4xx.c"
   ],
   "gcc_startup": [
-    "src/bsp/st/stm32f407/startup_stm32f407xx.s"
+    "src/platform/stm32f407/stm32f407_startup_gcc.s"
   ],
   "keil_startup": [
     "keil/startup_stm32f407xx.s"

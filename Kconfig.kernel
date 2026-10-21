@@ -44,7 +44,7 @@ config RT_USING_USER_MAIN
     bool
     default y
 
-# main 线程栈大小。当前 main 中只有 demo 应用和 LCD 初始化，
+# main 线程栈大小。当前 main 中只有 RPC 服务和 LCD 初始化，
 # 4096 字节留有充足余量；如果加入更多局部大数组需要调大。
 config RT_MAIN_THREAD_STACK_SIZE
     int "Main thread stack (bytes)"

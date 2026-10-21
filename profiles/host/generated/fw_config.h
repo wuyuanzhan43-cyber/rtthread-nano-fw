@@ -12,9 +12,10 @@
 #define FW_PROJECT_VERSION "0.2.0"
 #define FW_SERIAL_RX_BUFSZ 512
 #define FW_SERIAL_TX_BUFSZ 512
-#define FW_USE_DEMO_APP 1
+#define FW_TASK_MAX 8
 #define FW_USE_DISPLAY 1
 #define FW_USE_PROTOCOL 1
+#define FW_USE_TASK 1
 #define FW_USING_PIN 1
 #define FW_USING_SERIAL 1
 #define FW_USING_SPI 1

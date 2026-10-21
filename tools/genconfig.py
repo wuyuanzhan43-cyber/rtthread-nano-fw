@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""从 Kconfig 的 .config 生成 C 头文件、CMake 片段和配置摘要。
+"""从 Kconfig 的 .config 生成 C 头文件、CMake 片段、内存脚本和配置摘要。
 
 Kconfig 树是 v2 的唯一配置源。本脚本：
     1. 用 kconfiglib 解析 Kconfig 并载入 profile 的 .config；
-    2. 把符号值分成 RT_ / BOARD_ / FW_ 三组，生成对应头文件；
-    3. 生成 CMake 侧 CONFIG_* 变量；
-    4. 校验引脚范围、引脚冲突、控制台/LCD/DMA 等组合约束；
+    2. 把符号值分成 RT_ / BOARD_ / FW_ / APP_ 四组，生成对应头文件；
+    3. 生成 CMake 侧 CONFIG_* 变量和 board_memory.ld；
+    4. 校验端口 0..4、SWD 保留脚、引脚冲突、控制台/LCD/DMA 等约束；
     5. 支持 --check：只比较不写，供 CTest 防止生成物漂移。
 
 调用者：
@@ -59,7 +59,7 @@ def load_kconfig(kconfig_path: pathlib.Path) -> kconfiglib.Kconfig:
 
     kconfiglib 用环境变量 srctree 解析 source "..." 的相对路径；
     这里把它设为顶层 Kconfig 所在目录（项目根），
-    因此 source "src/bsp/st/Kconfig" 能正确找到文件。
+    因此 source "src/platform/stm32f407/Kconfig.drivers" 能正确找到文件。
     warn_to_stderr=False 避免默认警告污染 CMake 输出；
     真正的配置错误由 validate() 报告。
     """
@@ -97,7 +97,8 @@ def collect_symbols(kconf: kconfiglib.Kconfig) -> dict[str, tuple[str, object]]:
     """收集所有已定义符号的当前值。
 
     只遍历 unique_defined_syms，避免同一符号因多次 source 重复；
-    最后过滤掉 value 为 None 的未设置符号。
+    过滤掉 value 为 None 或空字符串的非 bool 符号（未激活的 int/hex/string），
+    避免生成 `#define NAME ` 或空 CMake 值。
     """
     result: dict[str, tuple[str, object]] = {}
     for sym in kconf.unique_defined_syms:
@@ -108,7 +109,14 @@ def collect_symbols(kconf: kconfiglib.Kconfig) -> dict[str, tuple[str, object]]:
         parsed = symbol_value(sym)
         if parsed is not None:
             result[sym.name] = parsed
-    return {k: v for k, v in result.items() if v is not None}
+
+    def keep(item: tuple[str, object]) -> bool:
+        kind, value = item
+        if kind == "bool":
+            return True
+        return str(value) != ""
+
+    return {k: v for k, v in result.items() if v is not None and keep(v)}
 
 
 def header_guard(name: str) -> str:
@@ -121,11 +129,11 @@ def render_header(filename: str, title: str, symbols: dict[str, tuple[str, objec
     """生成一个 C 头文件。
 
     规则：
-        - 只输出指定前缀的符号（RT_/BOARD_/FW_）；
+        - 只输出指定前缀的符号（RT_/BOARD_/FW_/APP_）；
         - bool 为真时写 #define NAME 1；
         - bool 为假时：
             RT_* 不定义（RT-Thread 用 #ifdef 判断特性）；
-            BOARD_*/FW_* 显式写 0（业务代码用 #if 判断）；
+            BOARD_*/FW_*/APP_* 显式写 0（业务代码用 #if 判断）；
         - string 做 C 字符串转义；
         - int/hex 直接写数值。
     """
@@ -200,8 +208,9 @@ def render_summary(target: str, symbols: dict[str, tuple[str, object]]) -> str:
 def validate(symbols: dict[str, tuple[str, object]]) -> list[str]:
     """校验配置组合，返回错误字符串列表。
 
-    只在 STM32 目标上做板级校验（Host profile 没有引脚）。
+    APP_* 在所有 profile 上校验；引脚/外设相关项只在 STM32 目标上校验。
     检查项：
+      0. APP_BOOT_MODE 必须在 0..2；
       1. 必备组件开关必须为 y；
       2. 所有引脚编号在 0..8 / 0..15；
       3. UART TX/RX 不能同引脚；
@@ -211,6 +220,18 @@ def validate(symbols: dict[str, tuple[str, object]]) -> list[str]:
       7. DMA 当前未实现，必须保持 n。
     """
     errors: list[str] = []
+
+    # 应用层配置与平台无关，Host profile 也要校验。
+    boot_mode = symbols.get("APP_BOOT_MODE")
+    if boot_mode is not None:
+        try:
+            mode_value = int(boot_mode[1])
+        except (TypeError, ValueError):
+            errors.append(f"APP_BOOT_MODE is not an integer: {boot_mode[1]}")
+        else:
+            if mode_value not in (0, 1, 2):
+                errors.append(f"APP_BOOT_MODE must be 0..2, got {mode_value}")
+
     target = bool(symbols.get("FW_PLATFORM_STM32F407VE", ("bool", False))[1])
     if not target:
         return errors
@@ -231,8 +252,8 @@ def validate(symbols: dict[str, tuple[str, object]]) -> list[str]:
         """布尔符号是否为 y；缺失视为 False。"""
         return bool(symbols.get(name, ("bool", False))[1])
 
-    # v2 第一版固定包含协议、示例应用和显示组件。
-    for name in ("FW_USE_PROTOCOL", "FW_USE_DEMO_APP", "FW_USE_DISPLAY"):
+    # v2 第一版固定包含协议、显示和任务管理组件。
+    for name in ("FW_USE_PROTOCOL", "FW_USE_DISPLAY", "FW_USE_TASK"):
         if not enabled(name):
             errors.append(f"{name} must be y in v2 first version")
 
@@ -242,10 +263,12 @@ def validate(symbols: dict[str, tuple[str, object]]) -> list[str]:
         """读取端口/引脚对，做范围检查并登记，供冲突检测使用。"""
         port = val(port_name)
         pin = val(pin_name)
-        if not 0 <= port <= 8:
-            errors.append(f"{port_name} must be 0..8 (A..I), got {port}")
+        if not 0 <= port <= 4:
+            errors.append(f"{port_name} must be 0..4 (A..E), got {port}")
         if not 0 <= pin <= 15:
             errors.append(f"{pin_name} must be 0..15, got {pin}")
+        if port == 0 and pin in (13, 14):
+            errors.append(f"{label} uses SWD pin PA{pin}; PA13/PA14 are reserved")
         used.append((port, pin, label))
         return port, pin
 
@@ -317,6 +340,42 @@ def write_if_changed(path: pathlib.Path, content: str) -> bool:
     return True
 
 
+def render_memory_ld(symbols: dict[str, tuple[str, object]]) -> str:
+    """从 BOARD_* 内存符号生成 GCC 链接脚本片段。"""
+
+    def value(name: str, default: str) -> str:
+        item = symbols.get(name)
+        return str(item[1]) if item is not None else default
+
+    def kb(name: str, default: int) -> int:
+        try:
+            return int(value(name, str(default)))
+        except (TypeError, ValueError):
+            return default
+
+    flash_origin = value("BOARD_FLASH_ORIGIN", "0x08000000")
+    ram_origin = value("BOARD_RAM_ORIGIN", "0x20000000")
+    ccm_origin = value("BOARD_CCM_ORIGIN", "0x10000000")
+    flash_kb = kb("BOARD_FLASH_SIZE_KB", 512)
+    ram_kb = kb("BOARD_RAM_SIZE_KB", 128)
+    ccm_kb = kb("BOARD_CCM_SIZE_KB", 64)
+    min_stack = value("BOARD_MIN_STACK_SIZE", "4096")
+
+    return "\n".join([
+        "/* Generated by tools/genconfig.py. Do not edit. */",
+        "/* Board memory map; included by link.lds. */",
+        "",
+        f"BOARD_FLASH_ORIGIN = {flash_origin};",
+        f"BOARD_FLASH_LENGTH = {flash_kb}K;",
+        f"BOARD_RAM_ORIGIN = {ram_origin};",
+        f"BOARD_RAM_LENGTH = {ram_kb}K;",
+        f"BOARD_CCM_ORIGIN = {ccm_origin};",
+        f"BOARD_CCM_LENGTH = {ccm_kb}K;",
+        f"BOARD_MIN_STACK_SIZE = {min_stack};",
+        "",
+    ])
+
+
 def generate(symbols: dict[str, tuple[str, object]], outdir: pathlib.Path) -> dict[str, str]:
     """生成所有输出文件的内容（尚未写盘）。
 
@@ -331,6 +390,9 @@ def generate(symbols: dict[str, tuple[str, object]], outdir: pathlib.Path) -> di
                                         symbols, "BOARD_"),
         "fw_config.h": render_header("fw_config.h", "Framework component configuration",
                                      symbols, "FW_"),
+        "app_config.h": render_header("app_config.h", "Application configuration",
+                                      symbols, "APP_"),
+        "board_memory.ld": render_memory_ld(symbols),
         "fw_config.cmake": render_cmake(symbols),
         "config_summary.txt": render_summary(target, symbols),
     }

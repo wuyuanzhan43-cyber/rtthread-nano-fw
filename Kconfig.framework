@@ -14,6 +14,12 @@ config FW_DEV_MAX
     default 16
     range 1 64
 
+# 任务管理器的静态任务表容量。每个 create/adopt 的任务占一个槽位。
+config FW_TASK_MAX
+    int "Max managed tasks"
+    default 8
+    range 1 32
+
 # pin/serial/spi 类的编译开关。
 # 当前 v2 固定启用；保留符号是为了让生成头文件与代码中的
 # #if FW_USING_* 判断保持一致，也方便以后做裁剪。
@@ -45,7 +51,7 @@ config FW_SERIAL_TX_BUFSZ
     default 512
     range 32 4096
 
-# v2 第一版无条件构建协议、demo 应用和显示组件。
+# v2 第一版无条件构建协议和显示组件。
 # 这些是隐藏符号（没有 prompt），不能通过 menuconfig 修改；
 # 保留它们是为了让生成头文件、CMake 和代码中的 #if 判断保持一致。
 config FW_USE_PROTOCOL
@@ -55,20 +61,19 @@ config FW_USE_PROTOCOL
         Hidden switch: the A5 5A protocol component is always built in v2.
         It exists so generated headers, CMake and source #if checks agree.
 
-config FW_USE_DEMO_APP
-    bool
-    depends on FW_USE_PROTOCOL
-    default y
-    help
-        Hidden switch: the demo application depends on the protocol.
-        Disable both together only when replacing the application layer.
-
 config FW_USE_DISPLAY
     bool
     default y
     help
         Hidden switch: display class and ST7735S driver are built in v2.
         BOARD_LCD_ENABLE depends on this symbol.
+
+config FW_USE_TASK
+    bool
+    default y
+    help
+        Hidden switch: task manager component is always built in v2.
+        It exists so generated headers, CMake and source #if checks agree.
 
 # 预留给日志等级；当前没有代码消费，保留是为了旧 .config 仍可加载。
 config FW_LOG_LEVEL

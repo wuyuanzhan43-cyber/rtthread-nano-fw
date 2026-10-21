@@ -34,7 +34,9 @@ endchoice
 source "Kconfig.kernel"
 # 自建设备框架的容量与组件开关。
 source "Kconfig.framework"
-# STM32 芯片时钟 + 共享驱动 + 逐实例 UART/SPI 开关。
-source "src/bsp/st/Kconfig"
+# 应用层业务与启动画面。
+source "Kconfig.app"
+# 逐实例 UART/SPI 开关（芯片能力）。
+source "src/platform/stm32f407/Kconfig.drivers"
 # 具体板卡：LED、控制台、引脚映射、LCD。
-source "src/board/stm32f407ve/Kconfig"
+source "src/platform/board/stm32f407ve/Kconfig.board"
