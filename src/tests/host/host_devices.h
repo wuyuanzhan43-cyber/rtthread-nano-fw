@@ -60,7 +60,8 @@
  * 引脚：
  *   pin_level      - 最后一次写入的电平；
  *   pin_writes     - 写次数；
- *   pin_configures - 配置次数。
+ *   pin_configures - 配置次数；
+ *   pin_irq_*      - EXTI attach/detach/enable 调用计数。
  *
  * 显示：
  *   display_writing - 是否处于 begin..end 之间；
@@ -90,6 +91,9 @@ typedef struct {
     bool pin_level;
     unsigned pin_writes;
     unsigned pin_configures;
+    unsigned pin_irq_attaches;
+    unsigned pin_irq_detaches;
+    unsigned pin_irq_enables;
 
     bool display_writing;
     uint16_t display_x;
@@ -147,5 +151,11 @@ size_t host_serial_rx_available(const fw_host_t *host);
  * 会重新初始化 wr_fifo，已有未发送数据会被丢弃。
  */
 void host_serial_set_write_limit(fw_host_t *host, size_t limit);
+
+/*
+ * 注入一次 pin 边沿事件：走 fw_dev_isr -> pin 类 isr -> 已绑定回调。
+ * 返回 FW_OK 表示回调表命中，FW_ENOTREADY 表示没有绑定。
+ */
+int host_pin_inject_irq(fw_host_t *host, int number, int mode);
 
 #endif

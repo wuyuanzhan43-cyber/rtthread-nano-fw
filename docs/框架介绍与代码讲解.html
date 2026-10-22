@@ -432,7 +432,7 @@ td code { white-space: nowrap; }
         <tr><td>板级可裁剪</td><td>逐实例 <code>FW_USING_UARTn</code> / <code>FW_USING_SPIn</code></td><td><code>src/platform/stm32f407/Kconfig</code></td></tr>
         <tr><td>无动态分配</td><td>静态注册表、静态 ring、静态事件对象</td><td><code>RT_USING_HEAP=n</code>，map/nm 无 malloc</td></tr>
         <tr><td>双工具链一致</td><td>单一 <code>project/sources.json</code> 驱动 CMake 与 Keil</td><td><code>check-manifest</code>、<code>gen-keil --check</code></td></tr>
-        <tr><td>逻辑可在 PC 验证</td><td>Host 假设备 + CTest，不依赖 RTOS/HAL</td><td><code>src/tests/host/</code>，6/6 通过</td></tr>
+        <tr><td>逻辑可在 PC 验证</td><td>Host 假设备 + CTest，不依赖 RTOS/HAL</td><td><code>src/tests/host/</code>，9/9 通过</td></tr>
       </tbody>
     </table>
   </div>
@@ -441,7 +441,7 @@ td code { white-space: nowrap; }
   <ul>
     <li><strong>不引入完整 RT-Thread：</strong>不使用 device framework、FinSH/msh、ulog、SAL；Nano 只作为调度和 IPC 内核。</li>
     <li><strong>不 vendor 整个 mr-library：</strong>它的 ring/pin IRQ 依赖动态分配，配置也会变成第二配置源；本项目只借鉴语义和板级表结构。</li>
-    <li><strong>不做 UART DMA：</strong>当前是 IT 路径，<code>BOARD_UART_DMA</code> 必须为 n，生成阶段会拒绝打开。</li>
+    <li><strong>UART DMA/EXTI：</strong>框架底座已实现，默认关闭；<code>f407ve-dma</code> 打开 UART1 DMA 与 pin EXTI，待上板验证。</li>
     <li><strong>不适配 AC6：</strong>Keil 工程固定 <code>uAC6=0</code>、<code>uC99=1</code>，使用 ARMCC 5.06。</li>
     <li><strong>不宣称硬件已验证：</strong>GCC/Keil 构建和 Host 测试已通过；真实烧录与 HIL 需要板卡，文档中明确标注边界。</li>
   </ul>
@@ -1180,7 +1180,7 @@ fw_status_t drv_serial_register_all(void)
     <li>所有已启用外设之间不能有引脚冲突；</li>
     <li>控制台选择的 UART 必须已启用；</li>
     <li>LCD 使用的 SPI 必须已启用；</li>
-    <li><code>BOARD_UART_DMA</code> 当前必须为 n，否则直接报错而不是静默忽略。</li>
+    <li>DMA/EXTI 框架已实现，默认构建仍走 IT；验证用 <code>f407ve-dma</code> profile。</li>
   </ul>
 
   <figure class="code">
@@ -1454,7 +1454,7 @@ python src/tests/hil/test_protocol.py --port COM7 --stats</code></pre>
         <tr><td>RTOS 解耦</td><td>lock/unlock、wait_rx、clock、delay 全部注入</td><td>多一层函数指针；core 可在 Host 测试</td></tr>
         <tr><td>配置</td><td>Kconfig + 生成头文件</td><td>需要运行生成器；换来单一配置源和 menuconfig</td></tr>
         <tr><td>Keil 工程</td><td>模板 + 生成，不手工维护</td><td>不能在 GUI 里永久改选项；换来与 CMake 一致</td></tr>
-        <tr><td>UART DMA</td><td>本轮不做，配置阶段拒绝打开</td><td>吞吐有限；避免半实现的 DMA 状态机</td></tr>
+        <tr><td>UART DMA/EXTI</td><td>框架已实现，默认关闭</td><td><code>f407ve-dma</code> 打开；时序需上板验证</td></tr>
       </tbody>
     </table>
   </div>
@@ -1498,18 +1498,18 @@ python src/tests/hil/test_protocol.py --port COM7 --stats</code></pre>
   </div>
 
   <div class="kpi">
-    <div class="kpi__item"><div class="kpi__v">6/6</div><div class="kpi__k">Host CTest</div></div>
+    <div class="kpi__item"><div class="kpi__v">9/9</div><div class="kpi__k">Host CTest</div></div>
     <div class="kpi__item"><div class="kpi__v">待复验</div><div class="kpi__k">Keil AC5（工程已重新生成）</div></div>
-    <div class="kpi__item"><div class="kpi__v">95,436 B</div><div class="kpi__k">F407 HSI Flash</div></div>
+    <div class="kpi__item"><div class="kpi__v">105,496 B</div><div class="kpi__k">F407 HSI Flash</div></div>
   </div>
 
   <div class="table-wrap">
     <table>
       <thead><tr><th>检查</th><th>结果</th><th>说明</th></tr></thead>
       <tbody>
-        <tr><td>Host 单元测试</td><td>6/6 通过</td><td>ring、协议、设备表、serial/pin/display、RPC、任务健康</td></tr>
-        <tr><td>F407 HSI（GCC 14）</td><td>Flash 95,436 B / RAM 14,896 B</td><td><code>cmake --preset f407-debug</code></td></tr>
-        <tr><td>F407 HSE（GCC 14）</td><td>Flash 95,436 B / RAM 14,896 B</td><td><code>cmake --preset f407-hse-debug</code></td></tr>
+        <tr><td>Host 单元测试</td><td>9/9 通过</td><td>ring、协议、设备表、serial/pin/display、RPC、任务健康</td></tr>
+        <tr><td>F407 HSI（GCC 14）</td><td>Flash 105,496 B / RAM 16,808 B</td><td><code>cmake --preset f407-debug</code></td></tr>
+        <tr><td>F407 HSE（GCC 14）</td><td>Flash 105,496 B / RAM 16,808 B</td><td><code>cmake --preset f407-hse-debug</code></td></tr>
         <tr><td>Keil AC5</td><td>待 UV4 复验</td><td>工程和 scatter 已由 manifest/board_config 重新生成</td></tr>
         <tr><td>配置一致性</td><td>3 个 profile 全部 OK</td><td><code>fwconfig.py check --all</code></td></tr>
         <tr><td>布局/manifest</td><td>OK（73 项）</td><td>无旧路径；src 下 .c 全部登记</td></tr>
@@ -1522,7 +1522,7 @@ python src/tests/hil/test_protocol.py --port COM7 --stats</code></pre>
     <li><strong>真实硬件烧录：</strong>需要 STM32F407VE 板卡和下载器；本文不声称上板通过。</li>
     <li><strong>串口 HIL：</strong>脚本已提供，但需要在板卡上运行固件并连接 USB-UART。</li>
     <li><strong>LCD 实际显示：</strong>面板时序在代码层完成，偏移/颜色顺序可能需要按实际批次调整 <code>BOARD_LCD_*</code>。</li>
-    <li><strong>UART DMA：</strong>未实现，<code>BOARD_UART_DMA</code> 必须为 n。</li>
+    <li><strong>UART DMA/EXTI：</strong>框架已实现，<code>f407ve-dma</code> 启用；当前未上板验证。</li>
     <li><strong>Keil AC6：</strong>未适配；工程固定 ARMCC 5.06 update 5。</li>
   </ul>
 
@@ -1586,7 +1586,7 @@ python src/tests/hil/test_protocol.py --port COM7 --stats</code></pre>
 
   <div class="callout">
     <span class="callout__label">建议的下一步</span>
-    <p>上板烧录 → 运行 HIL → 观察 LCD 偏移/颜色 → 再决定是否做 UART DMA。不要在没有硬件反馈的情况下继续堆功能。</p>
+    <p>上板烧录 → 运行 HIL → 观察 LCD 偏移/颜色 → 用 <code>f407ve-dma</code> 验证 UART DMA/EXTI。不要在没有硬件反馈的情况下继续堆功能。</p>
   </div>
 </section>
 

@@ -26,8 +26,11 @@
  *   一个设备 + 编号已经足够，能显著减少静态 RAM 和注册代码。
  */
 #include "drv_pin.h"
+#include "board_config.h"
 #include "stm32f407_pin_map.h"
 #include "stm32f407_map.h"
+#include <rthw.h>
+#include <string.h>
 
 /*
  * 编译期端口/引脚表。
@@ -164,11 +167,221 @@ static int drv_pin_write(fw_dev_t *dev, int number, int value)
     return FW_OK;
 }
 
+#if defined(FW_USING_PIN_EXTI) && FW_USING_PIN_EXTI
+/*
+ * EXTI 线所有权表。
+ *
+ * 索引是引脚号 0..15（不是端口），值是端口索引 0=A..4=E；
+ * 0xFF 表示该线空闲。STM32 的一条 EXTI 线只能属于一个端口，
+ * 例如 PA5 和 PB5 不能同时设为中断源。
+ */
+static uint8_t s_exti_owner[16];
+
+/* 16 条线 -> 7 个 NVIC 中断号，来自 stm32f407_pin_map.h。 */
+static const IRQn_Type s_exti_irq[16] = DRV_PIN_IRQ_MAP_CONFIG;
+
+/* EXTI 线 -> 引脚号的端口/引脚拆分辅助。 */
+static bool exti_line_valid(int number)
+{
+    return number >= 0 && (number >> 4) <= 4 && (number & 0x0F) <= 15;
+}
+
+/* 清 s_exti_owner；由注册函数在调度器启动前调用一次。 */
+static void exti_init(void)
+{
+    memset(s_exti_owner, 0xFF, sizeof(s_exti_owner));
+}
+
+/*
+ * 判断同一个 NVIC 分组里是否还有其他 owner。
+ *
+ * EXTI5..9 共用一个 IRQ，EXTI10..15 共用另一个。detach 一条线时不能
+ * 直接关闭整个分组中断，否则会误伤同组其他引脚。
+ */
+static bool exti_group_busy(IRQn_Type irq)
+{
+    size_t i;
+    for (i = 0U; i < 16U; ++i) {
+        if (s_exti_owner[i] != 0xFF && s_exti_irq[i] == irq) return true;
+    }
+    return false;
+}
+
+/*
+ * 配置一条 EXTI 线。
+ *
+ * 步骤：
+ *   1. SYSCFG.EXTICR 选择端口（每条线 4 bit）；
+ *   2. EXTI.IMR 打开中断屏蔽；
+ *   3. RTSR/FTSR 选择边沿；
+ *   4. 写 PR 清掉配置前可能残留的 pending；
+ *   5. 设置 NVIC 优先级并使能对应分组 IRQ。
+ *
+ * 同类 attach 重复调用时只更新边沿和 NVIC，不改变 owner；不同端口
+ * 争用同一条线返回 FW_EBUSY。
+ */
+static int drv_pin_attach_irq(fw_dev_t *dev, int number, int mode)
+{
+    uint8_t port;
+    uint8_t line;
+    uint32_t bit;
+    IRQn_Type irq;
+    (void)dev;
+
+    if (!exti_line_valid(number)) return FW_EINVAL;
+    if (mode == 0 || (mode & ~FW_PIN_IRQ_BOTH) != 0) return FW_EINVAL;
+    port = (uint8_t)(number >> 4);
+    line = (uint8_t)(number & 0x0F);
+    bit = 1U << line;
+
+    if (s_exti_owner[line] != 0xFF && s_exti_owner[line] != port)
+        return FW_EBUSY;
+
+    __HAL_RCC_SYSCFG_CLK_ENABLE();
+    SYSCFG->EXTICR[line >> 2U] &= ~(0x0FU << ((line & 0x03U) * 4U));
+    SYSCFG->EXTICR[line >> 2U] |= (uint32_t)port << ((line & 0x03U) * 4U);
+
+    EXTI->IMR |= bit;
+    if ((mode & FW_PIN_IRQ_RISING) != 0) EXTI->RTSR |= bit;
+    else EXTI->RTSR &= ~bit;
+    if ((mode & FW_PIN_IRQ_FALLING) != 0) EXTI->FTSR |= bit;
+    else EXTI->FTSR &= ~bit;
+    EXTI->PR = bit;
+
+    s_exti_owner[line] = port;
+    irq = s_exti_irq[line];
+    HAL_NVIC_SetPriority(irq, BOARD_EXTI_IRQ_PRIORITY, 0U);
+    HAL_NVIC_EnableIRQ(irq);
+    return FW_OK;
+}
+
+/* 停止监听一条线并释放 owner；同组还有其他线时保留 NVIC。 */
+static int drv_pin_detach_irq(fw_dev_t *dev, int number)
+{
+    uint8_t line;
+    uint32_t bit;
+    IRQn_Type irq;
+    (void)dev;
+
+    if (!exti_line_valid(number)) return FW_EINVAL;
+    line = (uint8_t)(number & 0x0F);
+    bit = 1U << line;
+    irq = s_exti_irq[line];
+
+    EXTI->IMR &= ~bit;
+    EXTI->RTSR &= ~bit;
+    EXTI->FTSR &= ~bit;
+    EXTI->PR = bit;
+    s_exti_owner[line] = 0xFF;
+    if (!exti_group_busy(irq)) HAL_NVIC_DisableIRQ(irq);
+    return FW_OK;
+}
+
+/* 临时屏蔽/恢复一条线；不改变 owner 和边沿配置。 */
+static int drv_pin_enable_irq(fw_dev_t *dev, int number, bool enable)
+{
+    uint8_t line;
+    (void)dev;
+
+    if (!exti_line_valid(number)) return FW_EINVAL;
+    line = (uint8_t)(number & 0x0F);
+    if (enable) {
+        EXTI->PR = 1U << line; /* 清掉屏蔽期间可能积累的 pending */
+        EXTI->IMR |= 1U << line;
+    } else {
+        EXTI->IMR &= ~(1U << line);
+    }
+    return FW_OK;
+}
+
+/*
+ * 共享 EXTI 中断体。
+ *
+ * 逐位检查 pending，先写 1 清除，再根据 owner 计算完整引脚号，
+ * 最后走 fw_dev_isr -> pin 类回调表。没有 owner 的 pending 也要清掉，
+ * 防止错误配置导致中断风暴。
+ */
+static void exti_irq_handler(uint32_t mask)
+{
+    uint32_t pending = EXTI->PR & mask;
+    uint8_t line;
+
+    for (line = 0U; line < 16U; ++line) {
+        uint32_t bit = 1U << line;
+        if ((pending & bit) == 0U) continue;
+        EXTI->PR = bit;
+        if (s_exti_owner[line] != 0xFF) {
+            int number = ((int)s_exti_owner[line] << 4) | (int)line;
+            (void)fw_dev_isr(&pin_device.dev, FW_ISR_PIN_EDGE, &number);
+        }
+    }
+}
+
+/* EXTI0..4 各自独立；EXTI5..9 共用 EXTI9_5；EXTI10..15 共用 EXTI15_10。 */
+void EXTI0_IRQHandler(void)
+{
+    rt_interrupt_enter();
+    exti_irq_handler(1U << 0);
+    rt_interrupt_leave();
+}
+
+void EXTI1_IRQHandler(void)
+{
+    rt_interrupt_enter();
+    exti_irq_handler(1U << 1);
+    rt_interrupt_leave();
+}
+
+void EXTI2_IRQHandler(void)
+{
+    rt_interrupt_enter();
+    exti_irq_handler(1U << 2);
+    rt_interrupt_leave();
+}
+
+void EXTI3_IRQHandler(void)
+{
+    rt_interrupt_enter();
+    exti_irq_handler(1U << 3);
+    rt_interrupt_leave();
+}
+
+void EXTI4_IRQHandler(void)
+{
+    rt_interrupt_enter();
+    exti_irq_handler(1U << 4);
+    rt_interrupt_leave();
+}
+
+void EXTI9_5_IRQHandler(void)
+{
+    rt_interrupt_enter();
+    exti_irq_handler(0x03E0U); /* bits 5..9 */
+    rt_interrupt_leave();
+}
+
+void EXTI15_10_IRQHandler(void)
+{
+    rt_interrupt_enter();
+    exti_irq_handler(0xFC00U); /* bits 10..15 */
+    rt_interrupt_leave();
+}
+#endif /* FW_USING_PIN_EXTI */
+
 /* pin 驱动 ops：类层会把 offset 转换成 number 后调用这些函数。 */
 static const fw_pin_ops_t drv_pin_ops = {
     drv_pin_configure,
     drv_pin_read,
-    drv_pin_write
+    drv_pin_write,
+#if defined(FW_USING_PIN_EXTI) && FW_USING_PIN_EXTI
+    drv_pin_attach_irq,
+    drv_pin_detach_irq,
+    drv_pin_enable_irq
+#else
+    NULL,
+    NULL,
+    NULL
+#endif
 };
 
 /*
@@ -189,5 +402,8 @@ static const fw_drv_t drv_pin_drv = {
  */
 fw_status_t drv_pin_register(void)
 {
+#if defined(FW_USING_PIN_EXTI) && FW_USING_PIN_EXTI
+    exti_init();
+#endif
     return fw_pin_register(&pin_device, "pin", &drv_pin_drv);
 }

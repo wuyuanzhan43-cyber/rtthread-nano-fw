@@ -13,6 +13,8 @@
 | `components/protocol/fw_protocol.c` | A5 5A 帧、CRC-16/CCITT-FALSE | `fw/status.h` |
 | `components/display/st7735s.c` | ST7735S，使用 `spiN` + `pin` 设备 | `fw/display.h`、`fw/spi.h`、`fw/pin.h` |
 | `components/task/fw_task.c` | 静态任务表、心跳/栈/CPU 健康度、控制 | `fw/task.h` |
+| `core/fw_serial.c`（DMA 辅助） | `rx_push`/`tx_peek`/`tx_consume`，ring 所有权留在类层 | `fw/serial.h` |
+| `core/fw_pin.c`（EXTI 类） | attach/detach/enable、静态回调表、`isr` 分派 | `fw/pin.h` |
 | `port/rtthread/rtthread_clock.c` | RT-Thread tick → `fw_clock_t` | RT-Thread kernel |
 | `port/rtthread/rtthread_task.c` | 静态 rt_thread、状态/栈快照、挂起/恢复/优先级 | `fw/rtthread_task.h`、RT-Thread |
 
@@ -59,11 +61,22 @@
 include/fw/adc.h                 类型令牌、ops、fw_adc_t
 core/fw_adc.c                    包装 + class 逻辑
 src/platform/stm32f407/drv_adc.c 芯片驱动
-src/platform/board/...           注册
+boards/<board>/board.json        实例/引脚/通道绑定
+chips/<chip>.json                AF/通道映射
 project/sources.json             登记源文件
 ```
 
 `core/fw_dev.c` 不需要修改。
 
-新增 UART/SPI 实例只改 Kconfig（`FW_USING_UARTn`/`FW_USING_SPIn` 和板级引脚），
-不需要修改任何 C/H。
+新增/修改 UART/SPI/I2C 等实例接线改 board manifest；已有实例的启用仍改
+`FW_USING_UARTn`/`FW_USING_SPIn`。生成器会校验 function+AF、重复引脚、
+DMA 流冲突和 EXTI 线冲突，不需要手写 AF 表。
+
+## DMA / EXTI
+
+- UART DMA 由 `FW_USING_UARTn_DMA_RX/TX` 选择；驱动用 `fw_serial_rx_push`
+  把 DMA 块写入类 ring，用 `tx_peek/tx_consume` 做 staging 发送。
+- `fw_serial_ops_t` 末尾的 `flush` 用于 CLR_WR_BUF 前 abort TX DMA。
+- pin EXTI 由 `FW_USING_PIN_EXTI` 选择；回调表在 `fw_pin_t` 内静态分配，
+  驱动 ISR 通过 `fw_dev_isr(FW_ISR_PIN_EDGE)` 上报引脚号。
+- 回调在 ISR 上下文执行，禁止阻塞；需要任务处理时在回调里发事件/信号量。

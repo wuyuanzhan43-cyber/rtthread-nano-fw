@@ -5,7 +5,8 @@
  * 职责：
  *   1. 每个启用的 UART 对应一个设备：serial1、serial2、serial3；
  *   2. 管理 RX/TX 两个静态 ring，向应用提供统一 read/write/ioctl；
- *   3. 通过驱动 ops 把硬件细节（寄存器、中断、事件）留在 bsp 层。
+ *   3. 通过驱动 ops 把硬件细节（寄存器、中断、事件）留在 bsp 层；
+ *   4. 向 DMA 驱动提供 rx_push/tx_peek/tx_consume，保持 ring 所有权在类层。
  *
  * 上下文：
  *   - open/read/write/ioctl/wait_rx：任务上下文；
@@ -100,7 +101,9 @@ typedef struct {
  * stop_tx    - 关闭 TXE 中断，表示发送完成；
  * wait_rx    - 等待 RX 事件，RTOS 相关实现放在驱动中；
  * lock       - 进入临界区，返回平台相关的“中断级别”；
- * unlock     - 退出临界区，参数是 lock 的返回值。
+ * unlock     - 退出临界区，参数是 lock 的返回值；
+ * flush      - 清缓冲前处理硬件侧状态（DMA TX abort / 停止发送）。
+ *              新增字段追加在末尾，保持现有位置初始化兼容。
  *
  * 为什么 wait_rx/lock 放在驱动而不是 core：
  *   这样 framework/core 不需要 include rtthread.h，
@@ -115,6 +118,7 @@ typedef struct {
     fw_status_t (*wait_rx)(fw_dev_t *dev, uint32_t timeout_ms);
     int (*lock)(fw_dev_t *dev);
     void (*unlock)(fw_dev_t *dev, int level);
+    int (*flush)(fw_dev_t *dev, bool rx);
 } fw_serial_ops_t;
 
 /*
@@ -160,6 +164,23 @@ fw_status_t fw_serial_register(fw_serial_t *serial, const char *name,
 
 /* 按名字查找串口对象；名字存在但类型不是 serial 时返回 NULL。 */
 fw_serial_t *fw_serial_find(const char *name);
+
+/*
+ * DMA 路径使用的类级辅助函数。
+ *
+ * 这些函数仍然由 serial 类持有 ring 的“所有权”，驱动只负责把硬件搬运
+ * 得到的数据交给类，避免驱动直接修改 rd_fifo/wr_fifo 的 head/tail/count。
+ * 三者内部都会调用驱动的 lock/unlock，因此可以安全地从 DMA 完成中断
+ * 或任务上下文调用；回调在中断上下文时，锁是 PRIMASK 关中断。
+ *
+ * rx_push    - 把一块 RX 数据写入 rd_fifo；短写时置 FW_EOVERFLOW；
+ * tx_peek    - 查看 wr_fifo 中最早的一块但不消费，供 DMA staging 使用；
+ * tx_consume - DMA 完成确认后消费对应字节，不复制数据。
+ */
+size_t fw_serial_rx_push(fw_serial_t *serial, const uint8_t *data,
+                         size_t length);
+size_t fw_serial_tx_peek(fw_serial_t *serial, uint8_t *dst, size_t capacity);
+size_t fw_serial_tx_consume(fw_serial_t *serial, size_t length);
 
 /* 修改配置的便捷函数，等价于 ioctl(SET_CONFIG)。 */
 int fw_serial_ioctl_config(fw_dev_t *dev, const fw_serial_config_t *config);

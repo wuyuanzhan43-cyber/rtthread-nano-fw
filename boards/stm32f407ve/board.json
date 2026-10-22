@@ -1,0 +1,142 @@
+{
+  "schema_version": 1,
+  "kind": "board",
+  "id": "stm32f407ve",
+  "identity": {
+    "name": "STM32F407VE",
+    "version": "0.2.0"
+  },
+  "chip": "stm32f407",
+  "reserved_pins": [],
+  "clock_variants": {
+    "hsi16": {
+      "source": "hsi",
+      "sysclk_hz": 16000000,
+      "ahb_div": 1,
+      "apb1_div": 1,
+      "apb2_div": 1,
+      "flash_latency": 0
+    },
+    "hse_8_168": {
+      "source": "hse",
+      "hse_hz": 8000000,
+      "sysclk_hz": 168000000,
+      "pll": { "m": 8, "n": 336, "p": 2, "q": 7 },
+      "ahb_div": 1,
+      "apb1_div": 4,
+      "apb2_div": 2,
+      "flash_latency": 5
+    }
+  },
+  "default_clock_variant": "hsi16",
+  "named_pins": {
+    "led": {
+      "pin": "E2",
+      "active_high": true
+    },
+    "lcd_cs": {
+      "pin": "A4",
+      "active_high": false
+    },
+    "lcd_dc": {
+      "pin": "A6"
+    },
+    "lcd_res": {
+      "pin": "A3",
+      "active_high": false
+    },
+    "lcd_bl": {
+      "pin": "A2",
+      "active_high": true
+    }
+  },
+  "peripherals": {
+    "uart": [
+      {
+        "instance": 1,
+        "name": "serial1",
+        "pins": {
+          "tx": { "pin": "A9", "af": 7, "pull": "none" },
+          "rx": { "pin": "A10", "af": 7, "pull": "up" }
+        },
+        "dma": { "rx": "auto", "tx": "auto" }
+      },
+      {
+        "instance": 2,
+        "name": "serial2",
+        "pins": {
+          "tx": { "pin": "D5", "af": 7, "pull": "none" },
+          "rx": { "pin": "D6", "af": 7, "pull": "up" }
+        },
+        "dma": { "rx": "auto", "tx": "auto" }
+      },
+      {
+        "instance": 3,
+        "name": "serial3",
+        "pins": {
+          "tx": { "pin": "B10", "af": 7, "pull": "none" },
+          "rx": { "pin": "B11", "af": 7, "pull": "up" }
+        },
+        "dma": { "rx": "auto", "tx": "auto" }
+      }
+    ],
+    "spi": [
+      {
+        "instance": 1,
+        "name": "spi1",
+        "pins": {
+          "sck": { "pin": "A5", "af": 5 },
+          "mosi": { "pin": "A7", "af": 5 },
+          "miso": { "pin": "A6", "af": 5 }
+        },
+        "dma": { "rx": "auto", "tx": "auto" }
+      },
+      {
+        "instance": 2,
+        "name": "spi2",
+        "pins": {
+          "sck": { "pin": "B13", "af": 5 },
+          "mosi": { "pin": "B15", "af": 5 },
+          "miso": { "pin": "B14", "af": 5 }
+        },
+        "dma": { "rx": "auto", "tx": "auto" }
+      },
+      {
+        "instance": 3,
+        "name": "spi3",
+        "pins": {
+          "sck": { "pin": "C10", "af": 6 },
+          "mosi": { "pin": "C12", "af": 6 },
+          "miso": { "pin": "C11", "af": 6 }
+        },
+        "dma": { "rx": "auto", "tx": "auto" }
+      }
+    ],
+    "i2c": [],
+    "adc": [],
+    "pwm": [],
+    "rtc": null,
+    "nvm": null
+  },
+  "exti": [],
+  "devices": {
+    "console": "serial1",
+    "led": "led",
+    "lcd": {
+      "controller": "st7735s",
+      "spi": "spi1",
+      "pins": {
+        "cs": "lcd_cs",
+        "dc": "lcd_dc",
+        "res": "lcd_res",
+        "bl": "lcd_bl"
+      },
+      "width": 128,
+      "height": 160,
+      "x_offset": 2,
+      "y_offset": 1,
+      "madctl": "0xC0",
+      "invert": false
+    }
+  }
+}

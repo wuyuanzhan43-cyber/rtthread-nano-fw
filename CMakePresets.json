@@ -45,13 +45,25 @@
         "FW_PROFILE": "f407ve-hse",
         "CMAKE_BUILD_TYPE": "Debug"
       }
+    },
+    {
+      "name": "f407-dma-debug",
+      "displayName": "STM32F407VE / UART DMA + EXTI / ARM GCC / Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/f407-dma-debug",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/arm-none-eabi.cmake",
+      "cacheVariables": {
+        "FW_PROFILE": "f407ve-dma",
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
     }
   ],
   "buildPresets": [
     { "name": "host-debug", "configurePreset": "host-debug" },
     { "name": "host-asan", "configurePreset": "host-asan" },
     { "name": "f407-debug", "configurePreset": "f407-debug" },
-    { "name": "f407-hse-debug", "configurePreset": "f407-hse-debug" }
+    { "name": "f407-hse-debug", "configurePreset": "f407-hse-debug" },
+    { "name": "f407-dma-debug", "configurePreset": "f407-dma-debug" }
   ],
   "testPresets": [
     { "name": "host-debug", "configurePreset": "host-debug", "output": { "outputOnFailure": true } },

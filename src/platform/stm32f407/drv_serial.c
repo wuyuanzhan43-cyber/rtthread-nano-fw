@@ -34,6 +34,16 @@
 #define DRV_SERIAL_TIMEOUT_DEFAULT 20U
 
 /*
+ * 前向声明：configure 在文件靠前的位置就要停止/重启 RX/TX，
+ * 而这些函数的完整实现放在 read/write 辅助函数之后。
+ * 显式声明可以避免 C 的隐式 int 声明和 -Werror 冲突。
+ */
+static fw_status_t serial_hw_start_rx(drv_serial_t *serial);
+static void serial_hw_stop_rx(drv_serial_t *serial);
+static int serial_start_tx(fw_dev_t *dev);
+static int serial_stop_tx(fw_dev_t *dev);
+
+/*
  * 毫秒到 RT-Thread tick 的转换。
  *
  * 特殊值：
@@ -107,13 +117,22 @@ static int serial_configure(fw_dev_t *dev, const fw_serial_config_t *config)
                                   : (config->parity == FW_SERIAL_PARITY_ODD
                                          ? UART_PARITY_ODD : UART_PARITY_NONE);
 
+    /*
+     * 重配前先停掉所有在途 DMA/中断。
+     *
+     * HAL_UART_Init 会重写 CR1/CR2/CR3，如果 DMA 还在搬运，旧配置下的
+     * 数据会和新配置混在一起；TX 在途数据在改波特率后也没有意义，
+     * 因此这里明确丢弃。重配完成后只恢复 RX，TX 等下一次 write 再启动。
+     */
     if (serial->started) {
-        __HAL_UART_DISABLE_IT(&serial->hal, UART_IT_RXNE);
+        serial_hw_stop_rx(serial);
+        (void)serial_stop_tx(&serial->base.dev);
         __HAL_UART_DISABLE_IT(&serial->hal, UART_IT_ERR);
+        __HAL_UART_DISABLE_IT(&serial->hal, UART_IT_TXE);
     }
     if (HAL_UART_Init(&serial->hal) != HAL_OK) return FW_EIO;
     if (serial->started) {
-        __HAL_UART_ENABLE_IT(&serial->hal, UART_IT_RXNE);
+        if (serial_hw_start_rx(serial) != FW_OK) return FW_EIO;
         __HAL_UART_ENABLE_IT(&serial->hal, UART_IT_ERR);
     }
     return FW_OK;
@@ -140,18 +159,96 @@ static int serial_write_byte(fw_dev_t *dev, uint8_t byte)
 }
 
 /*
+ * 启动 RX。
+ *
+ * 两条路径互斥：
+ *   - DMA：RXNE 必须关闭，否则 USART 中断也会读 DR，和 DMA 抢数据；
+ *     circular DMA 的缓冲区是 2*CHUNK，半传输/全传输各完成一半；
+ *   - IT：打开 RXNE，沿用原来的逐字节 ISR。
+ *
+ * 无论哪条路径都保留 ERR 中断：ORE/FE/NE/PE 需要驱动读取 SR/DR 清除；
+ * DMA 传输错误（TE）由 DMA IRQ 的 HAL_UART_ErrorCallback 负责恢复。
+ */
+static fw_status_t serial_hw_start_rx(drv_serial_t *serial)
+{
+    if (serial->dma_rx_enabled) {
+        __HAL_UART_DISABLE_IT(&serial->hal, UART_IT_RXNE);
+        serial->dma_rx_active = false;
+        if (!drv_dma_ptr_ok(serial->rx_dma_buf, sizeof(serial->rx_dma_buf)))
+            return FW_EINVAL;
+        if (HAL_UART_Receive_DMA(&serial->hal, serial->rx_dma_buf,
+                                 (uint16_t)sizeof(serial->rx_dma_buf)) != HAL_OK)
+            return FW_EIO;
+        serial->dma_rx_active = true;
+        return FW_OK;
+    }
+    __HAL_UART_ENABLE_IT(&serial->hal, UART_IT_RXNE);
+    return FW_OK;
+}
+
+/*
+ * 停止 RX。
+ *
+ * HAL_UART_DMAStop 同时停止 RX/TX DMA；配置或错误恢复时使用它是安全的，
+ * 因为这两个场景都允许丢弃在途数据。dma_rx_active 必须同步复位，
+ * 否则后续状态机会误以为 DMA 还在搬运。
+ */
+static void serial_hw_stop_rx(drv_serial_t *serial)
+{
+    if (serial->dma_rx_enabled) {
+        /*
+         * HAL_UART_DMAStop 同时停止 RX/TX；先清两个 active 和 staging 长度，
+         * 这样 abort 如果触发完成回调，不会被误认为正常传输完成。
+         */
+        serial->dma_rx_active = false;
+        serial->dma_tx_active = false;
+        serial->tx_stage_len = 0U;
+        (void)HAL_UART_DMAStop(&serial->hal);
+    } else {
+        __HAL_UART_DISABLE_IT(&serial->hal, UART_IT_RXNE);
+    }
+}
+
+/*
  * 启动/继续发送。
  *
- * 只在 tx_active 为 false 时打开 TXE 中断，避免每次 write 都重复使能。
- * 如果串口还没 start（中断未配置），返回 FW_ENOTREADY。
+ * IT 路径：
+ *   打开 TXE，ISR 每次从 wr_fifo 取一个字节写 DR；ring 空时 stop_tx。
  *
- * TXE 中断打开后，ISR 会不断从 wr_fifo 取字节，直到 ring 空，
- * 然后调用 stop_tx 关闭中断。
+ * DMA 路径：
+ *   - 用 fw_serial_tx_peek 把 ring 中最早的一块复制到 staging；
+ *     不能直接 read，否则 DMA 还在读 staging 时 ring 可能回绕覆盖数据；
+ *   - 启动 HAL_UART_Transmit_DMA，完成回调里再 consume；
+ *   - tx_stage_len 记录本块长度，供完成回调精确消费；
+ *   - dma_tx_active 防止重复启动同一块。
+ *
+ * 该函数既可能由任务 write 调用，也可能由 DMA TX 完成中断调用
+ * （继续发送下一块）；两者都在串口类的上下文语义内。
  */
 static int serial_start_tx(fw_dev_t *dev)
 {
     drv_serial_t *serial = FW_CONTAINER_OF(dev, drv_serial_t, base.dev);
     if (!serial->started) return FW_ENOTREADY;
+
+    if (serial->dma_tx_enabled) {
+        size_t count;
+        if (serial->dma_tx_active) return 0;
+        if (!drv_dma_ptr_ok(serial->tx_dma_buf, sizeof(serial->tx_dma_buf)))
+            return FW_EINVAL;
+        count = fw_serial_tx_peek(&serial->base, serial->tx_dma_buf,
+                                  sizeof(serial->tx_dma_buf));
+        if (count == 0U) return 0;
+        serial->tx_stage_len = (uint16_t)count;
+        serial->dma_tx_active = true;
+        if (HAL_UART_Transmit_DMA(&serial->hal, serial->tx_dma_buf,
+                                  (uint16_t)count) != HAL_OK) {
+            serial->dma_tx_active = false;
+            serial->tx_stage_len = 0U;
+            return FW_EIO;
+        }
+        return 0;
+    }
+
     if (!serial->tx_active) {
         serial->tx_active = true;
         __HAL_UART_ENABLE_IT(&serial->hal, UART_IT_TXE);
@@ -159,12 +256,36 @@ static int serial_start_tx(fw_dev_t *dev)
     return 0;
 }
 
-/* 关闭 TXE 中断并清除发送活跃标志；由类的 WR 事件在 ring 空时调用。 */
+/*
+ * 停止发送。
+ *
+ * DMA 路径必须 abort，否则清空/重配后硬件还会继续读 staging；
+ * 已经进入 staging 的字节可能已经发出，这是清发送缓冲的已知语义：
+ * 调用者要求“停止并丢弃”，不保证对端没有收到已经发出的前缀。
+ */
 static int serial_stop_tx(fw_dev_t *dev)
 {
     drv_serial_t *serial = FW_CONTAINER_OF(dev, drv_serial_t, base.dev);
+    if (serial->dma_tx_enabled && serial->dma_tx_active) {
+        /* 先清状态，避免 abort 内部回调把 staging 误当作已发送而消费。 */
+        serial->dma_tx_active = false;
+        serial->tx_stage_len = 0U;
+        (void)HAL_UART_AbortTransmit(&serial->hal);
+    }
     __HAL_UART_DISABLE_IT(&serial->hal, UART_IT_TXE);
     serial->tx_active = false;
+    return 0;
+}
+
+/*
+ * 类层 CLR_WR_BUF 的驱动侧钩子。
+ *
+ * RX 清理由类层在锁内直接清 ring 完成，DMA 可以继续运行；
+ * TX 必须先把在途 DMA 停掉，再让类层清 ring。
+ */
+static int serial_flush_ops(fw_dev_t *dev, bool rx)
+{
+    if (!rx) return serial_stop_tx(dev);
     return 0;
 }
 
@@ -236,8 +357,119 @@ static const fw_serial_ops_t drv_serial_ops = {
     serial_stop_tx,
     serial_wait_rx,
     serial_lock,
-    serial_unlock
+    serial_unlock,
+    serial_flush_ops
 };
+
+/*
+ * 初始化一个 DMA handle。
+ *
+ * 只做“DMA 句柄 + 路由”的通用配置；controller 时钟和 NVIC 由
+ * drv_dma_claim 统一管理。调用顺序很重要：
+ *   1. 设置 Instance（drv_dma_claim 会校验它和 route 一致）；
+ *   2. claim 打开 DMA 时钟并记录 owner；
+ *   3. HAL_DMA_Init 写寄存器；
+ *   4. __HAL_LINKDMA 把句柄挂到 UART。
+ *
+ * RX 使用 circular 模式，配合半传输/全传输回调形成双缓冲；
+ * TX 使用 normal 模式，一块完成后由回调再启动下一块。
+ */
+static fw_status_t serial_dma_setup_one(drv_serial_t *serial,
+                                        DMA_HandleTypeDef *hdma,
+                                        const drv_dma_route_t *route,
+                                        bool rx, const char *owner)
+{
+    uint32_t direction;
+    uint32_t mode;
+    uint32_t channel;
+
+    if (hdma == NULL || route == NULL) return FW_EINVAL;
+    hdma->Instance = stm32f407_dma_stream(route->controller, route->stream);
+    if (hdma->Instance == NULL) return FW_EINVAL;
+    channel = drv_dma_channel_value(route->channel);
+    if (channel == 0xFFFFFFFFU) return FW_EINVAL;
+
+    /*
+     * F4 的 DMA 请求由 channel 决定，方向/循环模式由 stream 配置。
+     * FIFO 关闭、字节对齐：UART 数据是 8 位，不需要打包。
+     */
+    direction = rx ? DMA_PERIPH_TO_MEMORY : DMA_MEMORY_TO_PERIPH;
+    mode = rx ? DMA_CIRCULAR : DMA_NORMAL;
+    hdma->Init.Channel = channel;
+    hdma->Init.Direction = direction;
+    hdma->Init.PeriphInc = DMA_PINC_DISABLE;
+    hdma->Init.MemInc = DMA_MINC_ENABLE;
+    hdma->Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
+    hdma->Init.MemDataAlignment = DMA_MDATAALIGN_BYTE;
+    hdma->Init.Mode = mode;
+    hdma->Init.Priority = DMA_PRIORITY_HIGH;
+    hdma->Init.FIFOMode = DMA_FIFOMODE_DISABLE;
+    hdma->Init.FIFOThreshold = DMA_FIFO_THRESHOLD_HALFFULL;
+    hdma->Init.MemBurst = DMA_MBURST_SINGLE;
+    hdma->Init.PeriphBurst = DMA_PBURST_SINGLE;
+
+    if (drv_dma_claim(hdma, route, owner) != FW_OK) return FW_EBUSY;
+    if (HAL_DMA_Init(hdma) != HAL_OK) {
+        drv_dma_release(hdma);
+        return FW_EIO;
+    }
+    if (rx) __HAL_LINKDMA(&serial->hal, hdmarx, serial->hdma_rx);
+    else __HAL_LINKDMA(&serial->hal, hdmatx, serial->hdma_tx);
+    return FW_OK;
+}
+
+/* DMA owner 诊断名；用实例号索引，避免在中断路径里格式化字符串。 */
+static const char *serial_dma_owner(uint8_t instance, bool rx)
+{
+    static const char *const rx_names[3] = {
+        "serial1.rx", "serial2.rx", "serial3.rx"
+    };
+    static const char *const tx_names[3] = {
+        "serial1.tx", "serial2.tx", "serial3.tx"
+    };
+    if (instance >= 1U && instance <= 3U)
+        return rx ? rx_names[instance - 1U] : tx_names[instance - 1U];
+    return rx ? "uart.rx" : "uart.tx";
+}
+
+/*
+ * 只在 Kconfig 打开对应 DMA 开关时初始化 RX/TX 句柄。
+ *
+ * 未启用时把路由清成 DRV_DMA_NONE，后续 serial_start_tx/serial_hw_start_rx
+ * 会走原来的 IT 路径；这样同一个驱动结构体可以同时服务两种配置，
+ * 不需要在 C 代码里按实例写 #if。
+ */
+static fw_status_t serial_dma_setup(drv_serial_t *serial,
+                                    const drv_serial_hw_t *hw)
+{
+    serial->dma_rx_route = hw->dma_rx;
+    serial->dma_tx_route = hw->dma_tx;
+    serial->dma_rx_enabled = hw->dma_rx_enabled;
+    serial->dma_tx_enabled = hw->dma_tx_enabled;
+
+    if (!serial->dma_rx_enabled) {
+        serial->dma_rx_route.controller = DRV_DMA_NONE;
+        serial->dma_rx_route.stream = DRV_DMA_NONE;
+        serial->dma_rx_route.channel = DRV_DMA_NONE;
+    } else {
+        fw_status_t result = serial_dma_setup_one(
+            serial, &serial->hdma_rx, &serial->dma_rx_route, true,
+            serial_dma_owner(hw->instance, true));
+        if (result != FW_OK) return result;
+    }
+
+    if (!serial->dma_tx_enabled) {
+        serial->dma_tx_route.controller = DRV_DMA_NONE;
+        serial->dma_tx_route.stream = DRV_DMA_NONE;
+        serial->dma_tx_route.channel = DRV_DMA_NONE;
+    } else {
+        fw_status_t result = serial_dma_setup_one(
+            serial, &serial->hdma_tx, &serial->dma_tx_route, false,
+            serial_dma_owner(hw->instance, false));
+        if (result != FW_OK) return result;
+    }
+    return FW_OK;
+}
 
 /*
  * 初始化一个串口实例。
@@ -254,10 +486,12 @@ static const fw_serial_ops_t drv_serial_ops = {
  *   2. 配置 TX/RX GPIO；
  *   3. 使能 USART 时钟，填写 HAL 初始化参数并 HAL_UART_Init；
  *   4. 初始化 RT 事件（用于 wait_rx）；
- *   5. 填写驱动描述，注册 serial 类设备（传入静态 ring 存储）。
+ *   5. 按需初始化 DMA 句柄并 claim stream；
+ *   6. 填写驱动描述，注册 serial 类设备（传入静态 ring 存储）。
  *
- * 注意：这里不打开 NVIC 中断，也不使能 RXNE/TXE；
- * 这些动作在 serial_start_instance 中完成，保证设备已注册。
+ * 注意：这里不打开 NVIC 中断，也不启动 RX/TX DMA；
+ * 这些动作在 serial_start_instance / serial_start_tx 中完成，
+ * 保证设备已注册、ring 已就绪。
  */
 static fw_status_t serial_init_instance(drv_serial_t *serial, const char *name,
                                         const drv_serial_hw_t *hw)
@@ -292,6 +526,10 @@ static fw_status_t serial_init_instance(drv_serial_t *serial, const char *name,
     status = HAL_UART_Init(&serial->hal);
     if (status != HAL_OK) return FW_EIO;
 
+    /* DMA 句柄必须在 HAL_UART_Init 之后绑定，避免 HAL 初始化覆盖关联。 */
+    result = serial_dma_setup(serial, hw);
+    if (result != FW_OK) return result;
+
     /* 事件名使用设备名，便于调试器/日志识别是哪个串口的事件。 */
     if (rt_event_init(&serial->rx_event, name, RT_IPC_FLAG_FIFO) != RT_EOK)
         return FW_EIO;
@@ -306,6 +544,9 @@ static fw_status_t serial_init_instance(drv_serial_t *serial, const char *name,
     serial->drv.data = serial;
     serial->started = false;
     serial->tx_active = false;
+    serial->dma_rx_active = false;
+    serial->dma_tx_active = false;
+    serial->tx_stage_len = 0U;
 
     /* ring 存储区属于驱动实例，类只保存指针和控制块。 */
     return fw_serial_register(&serial->base, name, &serial->drv,
@@ -317,20 +558,26 @@ static fw_status_t serial_init_instance(drv_serial_t *serial, const char *name,
 /*
  * 启动一个串口实例。
  *
- * 设置 NVIC 优先级并使能中断；初始只打开 RXNE 和 ERR，
- * TXE 在第一次 write 时由 serial_start_tx 按需打开。
+ * 设置 NVIC 优先级并使能 USART 中断，然后：
+ *   - DMA RX：HAL_UART_Receive_DMA 进入 circular 模式；
+ *   - IT RX：打开 RXNE。
+ * 两种路径都打开 ERR；TXE 在第一次 write 时按需打开。
  *
- * started=true 之后，serial_configure 才会在重配置时临时关中断。
+ * started=true 之后，serial_configure 才知道需要保存/恢复这些硬件状态。
  */
-static void serial_start_instance(drv_serial_t *serial)
+static fw_status_t serial_start_instance(drv_serial_t *serial)
 {
-    if (serial == NULL || serial->started) return;
+    if (serial == NULL || serial->started) return FW_OK;
     HAL_NVIC_SetPriority(serial->irq, serial->irq_priority, 0U);
     HAL_NVIC_EnableIRQ(serial->irq);
     __HAL_UART_DISABLE_IT(&serial->hal, UART_IT_TXE);
-    __HAL_UART_ENABLE_IT(&serial->hal, UART_IT_RXNE);
+    if (serial_hw_start_rx(serial) != FW_OK) {
+        HAL_NVIC_DisableIRQ(serial->irq);
+        return FW_EIO;
+    }
     __HAL_UART_ENABLE_IT(&serial->hal, UART_IT_ERR);
     serial->started = true;
+    return FW_OK;
 }
 
 /*
@@ -379,6 +626,117 @@ static const char *serial_name(uint8_t instance)
 }
 
 /*
+ * HAL 回调只有全局 weak 符号，没有实例参数；必须通过 huart 指针反查
+ * 驱动实例，否则多串口同时启用时回调和错误会串到别的串口。
+ */
+static drv_serial_t *serial_from_huart(UART_HandleTypeDef *huart)
+{
+#if defined(FW_USING_UART1) && FW_USING_UART1
+    if (huart == &serial1.hal) return &serial1;
+#endif
+#if defined(FW_USING_UART2) && FW_USING_UART2
+    if (huart == &serial2.hal) return &serial2;
+#endif
+#if defined(FW_USING_UART3) && FW_USING_UART3
+    if (huart == &serial3.hal) return &serial3;
+#endif
+    return NULL;
+}
+
+/*
+ * circular RX DMA：前半区完成。
+ *
+ * 半传输中断只表示“前半块已经写满”，DMA 仍在向后半区写入；
+ * 此时把前半块交给类层是安全的，后半区不会被这次拷贝触碰。
+ * 处理完立即 rt_event_send，让等待 wait_rx 的任务醒来。
+ */
+void HAL_UART_RxHalfCpltCallback(UART_HandleTypeDef *huart)
+{
+    drv_serial_t *serial = serial_from_huart(huart);
+    if (serial == NULL || !serial->dma_rx_enabled || !serial->dma_rx_active)
+        return;
+    (void)fw_serial_rx_push(&serial->base, serial->rx_dma_buf,
+                            FW_SERIAL_DMA_CHUNK);
+    (void)rt_event_send(&serial->rx_event, 1U);
+}
+
+/*
+ * circular RX DMA：后半区完成。
+ *
+ * 此时 DMA 已经回绕到前半区；后半块已经完整，可以安全复制。
+ * 不在这里重新启动 DMA：circular 模式由硬件自动续传。
+ */
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+    drv_serial_t *serial = serial_from_huart(huart);
+    if (serial == NULL || !serial->dma_rx_enabled || !serial->dma_rx_active)
+        return;
+    (void)fw_serial_rx_push(&serial->base,
+                            serial->rx_dma_buf + FW_SERIAL_DMA_CHUNK,
+                            FW_SERIAL_DMA_CHUNK);
+    (void)rt_event_send(&serial->rx_event, 1U);
+}
+
+/*
+ * TX DMA 完成。
+ *
+ * 先消费 ring 中对应的 tx_stage_len 字节，再检查是否还有数据：
+ *   - 有：立即 peek 下一块并启动新的 DMA；
+ *   - 无：清空 active 标志，等待下一次 write。
+ *
+ * 注意：消费必须发生在 DMA 完成之后；peek/staging 的稳定性依赖
+ * “tail 在发送期间不移动”这一约定。
+ */
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+    drv_serial_t *serial = serial_from_huart(huart);
+    uint16_t consumed;
+
+    if (serial == NULL || !serial->dma_tx_enabled || !serial->dma_tx_active)
+        return;
+    consumed = serial->tx_stage_len;
+    serial->tx_stage_len = 0U;
+    serial->dma_tx_active = false;
+    if (consumed != 0U) (void)fw_serial_tx_consume(&serial->base, consumed);
+    if (serial->base.wr_fifo.count != 0U)
+        (void)serial_start_tx(&serial->base.dev);
+}
+
+/*
+ * UART 错误回调。
+ *
+ * ORE 映射为 FW_EOVERFLOW，其余 FE/NE/PE 映射为 FW_EIO。错误会唤醒
+ * wait_rx，任务下一次 read 会拿到错误并清空 RX ring（类层既有语义）。
+ *
+ * DMA 模式下必须停止并重新 arm RX DMA，否则 HAL 可能停在 BUSY 状态，
+ * 后续数据不再进入 ring。TX 在途数据在错误时直接丢弃，避免把可能
+ * 已损坏的前缀继续发送。
+ */
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+    drv_serial_t *serial = serial_from_huart(huart);
+    fw_status_t error;
+
+    if (serial == NULL) return;
+    error = (huart->ErrorCode & HAL_UART_ERROR_ORE) != 0U
+                ? FW_EOVERFLOW : FW_EIO;
+    serial->base.error = error;
+
+    if (serial->dma_rx_enabled || serial->dma_tx_enabled) {
+        serial->dma_rx_active = false;
+        serial->dma_tx_active = false;
+        serial->tx_stage_len = 0U;
+        serial->tx_active = false;
+        (void)HAL_UART_DMAStop(&serial->hal);
+        if (serial->started && serial->dma_rx_enabled) {
+            (void)serial_hw_start_rx(serial);
+            __HAL_UART_ENABLE_IT(&serial->hal, UART_IT_ERR);
+        }
+    }
+    (void)rt_event_send(&serial->rx_event, 1U);
+}
+
+/*
  * 按板级描述符注册串口。
  *
  * 描述符表由 board_pins.c 提供；驱动只负责实例对象和 HAL 初始化。
@@ -391,6 +749,8 @@ fw_status_t drv_serial_register_all(const drv_serial_hw_t *hw, size_t count)
     if (count == 0U) return FW_OK;
     if (hw == NULL) return FW_EINVAL;
 
+    /* DMA owner 表在第一次注册前清零；所有实例共享同一组 stream。 */
+    drv_dma_init();
     for (i = 0U; i < count; ++i) {
         drv_serial_t *slot = serial_slot(hw[i].instance);
         const char *name = serial_name(hw[i].instance);
@@ -402,17 +762,21 @@ fw_status_t drv_serial_register_all(const drv_serial_hw_t *hw, size_t count)
     return FW_OK;
 }
 
-/* 打开所有已启用串口的中断；重复调用安全。 */
+/* 打开所有已启用串口的 RX 路径；重复调用安全。 */
 fw_status_t drv_serial_start_all(void)
 {
+    fw_status_t result;
 #if defined(FW_USING_UART1) && FW_USING_UART1
-    serial_start_instance(&serial1);
+    result = serial_start_instance(&serial1);
+    if (result != FW_OK) return result;
 #endif
 #if defined(FW_USING_UART2) && FW_USING_UART2
-    serial_start_instance(&serial2);
+    result = serial_start_instance(&serial2);
+    if (result != FW_OK) return result;
 #endif
 #if defined(FW_USING_UART3) && FW_USING_UART3
-    serial_start_instance(&serial3);
+    result = serial_start_instance(&serial3);
+    if (result != FW_OK) return result;
 #endif
     return FW_OK;
 }
@@ -468,6 +832,12 @@ void drv_serial_irq_handler(drv_serial_t *serial)
 
     if ((sr & (USART_SR_ORE | USART_SR_FE | USART_SR_NE | USART_SR_PE)) != 0U) {
         (void)fw_dev_isr(&serial->base.dev, FW_ISR_SERIAL_ERR, NULL);
+        /*
+         * 这里已经读过 DR，ORE/FE/NE/PE 被清除。DMA 模式的 circular
+         * stream 仍在运行，不需要在 USART ISR 里 abort/重启（那会引入
+         * HAL 阻塞式 abort）。真正的 DMA 传输错误由 DMA IRQ 的
+         * HAL_UART_ErrorCallback 处理。
+         */
         wake = true;
     }
 

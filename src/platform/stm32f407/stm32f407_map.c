@@ -159,6 +159,76 @@ void stm32f407_spi_clock_enable(uint8_t instance)
 }
 
 /*
+ * DMA stream 编号 -> CMSIS 寄存器块。
+ *
+ * 之所以用 switch 而不是基址+偏移，是因为 DMA1/DMA2 的 stream 寄存器
+ * 是 0x18 字节步进的独立块，直接使用 CMSIS 符号更清晰，也避免把
+ * 寄存器布局假设写死。
+ */
+DMA_Stream_TypeDef *stm32f407_dma_stream(uint8_t controller, uint8_t stream)
+{
+    if (controller == 1U) {
+        switch (stream) {
+        case 0U: return DMA1_Stream0;
+        case 1U: return DMA1_Stream1;
+        case 2U: return DMA1_Stream2;
+        case 3U: return DMA1_Stream3;
+        case 4U: return DMA1_Stream4;
+        case 5U: return DMA1_Stream5;
+        case 6U: return DMA1_Stream6;
+        case 7U: return DMA1_Stream7;
+        default: return NULL;
+        }
+    }
+    if (controller == 2U) {
+        switch (stream) {
+        case 0U: return DMA2_Stream0;
+        case 1U: return DMA2_Stream1;
+        case 2U: return DMA2_Stream2;
+        case 3U: return DMA2_Stream3;
+        case 4U: return DMA2_Stream4;
+        case 5U: return DMA2_Stream5;
+        case 6U: return DMA2_Stream6;
+        case 7U: return DMA2_Stream7;
+        default: return NULL;
+        }
+    }
+    return NULL;
+}
+
+/* DMA stream 编号 -> NVIC 中断号；非法组合返回 (IRQn_Type)-1。 */
+IRQn_Type stm32f407_dma_irq(uint8_t controller, uint8_t stream)
+{
+    if (controller == 1U) {
+        switch (stream) {
+        case 0U: return DMA1_Stream0_IRQn;
+        case 1U: return DMA1_Stream1_IRQn;
+        case 2U: return DMA1_Stream2_IRQn;
+        case 3U: return DMA1_Stream3_IRQn;
+        case 4U: return DMA1_Stream4_IRQn;
+        case 5U: return DMA1_Stream5_IRQn;
+        case 6U: return DMA1_Stream6_IRQn;
+        case 7U: return DMA1_Stream7_IRQn;
+        default: return (IRQn_Type)(-1);
+        }
+    }
+    if (controller == 2U) {
+        switch (stream) {
+        case 0U: return DMA2_Stream0_IRQn;
+        case 1U: return DMA2_Stream1_IRQn;
+        case 2U: return DMA2_Stream2_IRQn;
+        case 3U: return DMA2_Stream3_IRQn;
+        case 4U: return DMA2_Stream4_IRQn;
+        case 5U: return DMA2_Stream5_IRQn;
+        case 6U: return DMA2_Stream6_IRQn;
+        case 7U: return DMA2_Stream7_IRQn;
+        default: return (IRQn_Type)(-1);
+        }
+    }
+    return (IRQn_Type)(-1);
+}
+
+/*
  * SPI 总线时钟。
  *
  * 在 STM32F407 的时钟树中：

@@ -47,6 +47,20 @@ IRQn_Type stm32f407_spi_irq(uint8_t instance);
 void stm32f407_spi_clock_enable(uint8_t instance);
 
 /*
+ * DMA 映射：
+ *   controller 1=DMA1、2=DMA2；stream 0..7。
+ * dma_stream 返回 HAL 需要写入 DMA_HandleTypeDef.Instance 的寄存器块；
+ * dma_irq 返回该 stream 的 NVIC 中断号。
+ * 非法组合分别返回 NULL / (IRQn_Type)-1。
+ *
+ * 芯片级 DMA 请求表（哪个外设用哪个 controller/stream/channel）在
+ * chip manifest 中，由 boardgen 生成到 board_config.h；这里只做
+ * “编号 -> CMSIS 符号”的纯映射，不包含板级策略。
+ */
+DMA_Stream_TypeDef *stm32f407_dma_stream(uint8_t controller, uint8_t stream);
+IRQn_Type stm32f407_dma_irq(uint8_t controller, uint8_t stream);
+
+/*
  * 返回 SPI 所在总线的时钟频率：
  *   SPI1 挂在 APB2（PCLK2）；
  *   SPI2/SPI3 挂在 APB1（PCLK1）。

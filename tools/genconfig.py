@@ -34,6 +34,26 @@ sys.path.insert(0, str(HERE / "kconfiglib"))
 
 import kconfiglib  # noqa: E402
 
+import boardgen  # noqa: E402
+
+
+def unknown_config_keys(config_path: pathlib.Path, kconf) -> list[str]:
+    """返回 .config 中已不存在于 Kconfig 树的键。
+
+    迁移到 manifest 后，旧的 CONFIG_BOARD_* 拓扑键必须被清理；
+    否则它们会静默留在 .config 里，形成第二份事实。
+    """
+    known = {sym.name for sym in kconf.unique_defined_syms}
+    unknown: list[str] = []
+    for raw in config_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line.startswith("CONFIG_") or "=" not in line:
+            continue
+        name = line[len("CONFIG_"):].split("=", 1)[0].strip()
+        if name not in known:
+            unknown.append(name)
+    return unknown
+
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     """定义命令行参数。
@@ -208,16 +228,14 @@ def render_summary(target: str, symbols: dict[str, tuple[str, object]]) -> str:
 def validate(symbols: dict[str, tuple[str, object]]) -> list[str]:
     """校验配置组合，返回错误字符串列表。
 
-    APP_* 在所有 profile 上校验；引脚/外设相关项只在 STM32 目标上校验。
-    检查项：
+    APP_* 在所有 profile 上校验；任务/RT 相关项只在 STM32 目标上校验。
+    板级引脚、AF、时钟、内存、DMA/EXTI 约束由 tools/boardgen.py 负责。
+    这里只保留：
       0. APP_BOOT_MODE 必须在 0..2；
       1. 必备组件开关必须为 y；
-      2. 所有引脚编号在 0..8 / 0..15；
-      3. UART TX/RX 不能同引脚；
-      4. 控制台选择的 UART 必须已启用；
-      5. LCD 使用的 SPI 必须已启用；
-      6. 所有已启用外设之间不能有引脚冲突；
-      7. DMA 当前未实现，必须保持 n。
+      2. RPC 等待、心跳 warn/lost 必须满足时序关系；
+      3. 任务优先级必须小于 RT_THREAD_PRIORITY_MAX；
+      4. 任务表和设备表容量必须覆盖 app 的最小需求。
     """
     errors: list[str] = []
 
@@ -257,69 +275,48 @@ def validate(symbols: dict[str, tuple[str, object]]) -> list[str]:
         if not enabled(name):
             errors.append(f"{name} must be y in v2 first version")
 
-    used: list[tuple[int, int, str]] = []
+    # SPI DMA 的路由/开关已预留，但驱动异步传输仍在 M2；
+    # 打开时直接拒绝，避免“配置成功但没有实现”的静默错误。
+    for number in (1, 2, 3):
+        if enabled(f"FW_USING_SPI{number}_DMA"):
+            errors.append(f"FW_USING_SPI{number}_DMA is reserved for M2 and not implemented yet")
 
-    def add_pin(label: str, port_name: str, pin_name: str) -> tuple[int, int]:
-        """读取端口/引脚对，做范围检查并登记，供冲突检测使用。"""
-        port = val(port_name)
-        pin = val(pin_name)
-        if not 0 <= port <= 4:
-            errors.append(f"{port_name} must be 0..4 (A..E), got {port}")
-        if not 0 <= pin <= 15:
-            errors.append(f"{pin_name} must be 0..15, got {pin}")
-        if port == 0 and pin in (13, 14):
-            errors.append(f"{label} uses SWD pin PA{pin}; PA13/PA14 are reserved")
-        used.append((port, pin, label))
-        return port, pin
+    # 任务/心跳/优先级交叉约束。单看每个范围都合法，组合起来却可能
+    # 让 RPC 长等待越过心跳阈值、或让 fw_task_create 直接失败。
+    task_max = val("FW_TASK_MAX")
+    if task_max < 3:
+        errors.append(f"FW_TASK_MAX must be >= 3 (main + rpc + worker), got {task_max}")
 
-    if enabled("BOARD_LED_ENABLE"):
-        add_pin("LED", "BOARD_LED_PORT", "BOARD_LED_PIN")
+    dev_max = val("FW_DEV_MAX")
+    if dev_max < 4:
+        errors.append(f"FW_DEV_MAX must be >= 4 (pin + serial + spi + lcd), got {dev_max}")
 
-    # UART：检查 TX/RX 不同引脚；每个实例只在启用时登记。
-    for n in (1, 2, 3):
-        if enabled(f"FW_USING_UART{n}"):
-            tx = add_pin(f"UART{n}_TX", f"BOARD_UART{n}_TX_PORT", f"BOARD_UART{n}_TX_PIN")
-            rx = add_pin(f"UART{n}_RX", f"BOARD_UART{n}_RX_PORT", f"BOARD_UART{n}_RX_PIN")
-            if tx == rx:
-                errors.append(f"UART{n} TX and RX cannot use the same pin")
+    rpc_wait = val("APP_RPC_LOOP_WAIT_MAX_MS")
+    worker_period = val("APP_WORKER_PERIOD_MS")
+    hb_warn = val("APP_TASK_HEARTBEAT_WARN_MS")
+    hb_lost = val("APP_TASK_HEARTBEAT_LOST_MS")
+    if not 0 < rpc_wait < hb_warn < hb_lost:
+        errors.append(
+            "must satisfy APP_RPC_LOOP_WAIT_MAX_MS < "
+            "APP_TASK_HEARTBEAT_WARN_MS < APP_TASK_HEARTBEAT_LOST_MS; "
+            f"got {rpc_wait}/{hb_warn}/{hb_lost}")
+    if not 0 < worker_period < hb_warn:
+        errors.append(
+            "APP_WORKER_PERIOD_MS must be < APP_TASK_HEARTBEAT_WARN_MS; "
+            f"got {worker_period}/{hb_warn}")
 
-    # 控制台必须指向一个已启用的 UART。
-    console = val("BOARD_CONSOLE_UART_NUM")
-    if console not in (1, 2, 3):
-        errors.append(f"BOARD_CONSOLE_UART_NUM must be 1..3, got {console}")
-    elif not enabled(f"FW_USING_UART{console}"):
-        errors.append(f"console UART{console} is selected but FW_USING_UART{console}=n")
+    priority_max = val("RT_THREAD_PRIORITY_MAX")
+    for name in ("RT_MAIN_THREAD_PRIORITY", "APP_RPC_TASK_PRIORITY",
+                 "APP_WORKER_TASK_PRIORITY"):
+        priority = val(name)
+        if priority >= priority_max:
+            errors.append(
+                f"{name}={priority} must be < RT_THREAD_PRIORITY_MAX={priority_max}")
 
-    # SPI：只有启用 MISO 时才登记 MISO 引脚。
-    for n in (1, 2, 3):
-        if enabled(f"FW_USING_SPI{n}"):
-            add_pin(f"SPI{n}_SCK", f"BOARD_SPI{n}_SCK_PORT", f"BOARD_SPI{n}_SCK_PIN")
-            add_pin(f"SPI{n}_MOSI", f"BOARD_SPI{n}_MOSI_PORT", f"BOARD_SPI{n}_MOSI_PIN")
-            if enabled(f"BOARD_SPI{n}_USE_MISO"):
-                add_pin(f"SPI{n}_MISO", f"BOARD_SPI{n}_MISO_PORT", f"BOARD_SPI{n}_MISO_PIN")
-
-    # LCD：依赖 display 组件、一个已启用的 SPI，以及 CS/DC/RES/BL 四根引脚。
-    lcd = enabled("BOARD_LCD_ENABLE")
-    if lcd:
-        if not enabled("FW_USE_DISPLAY"):
-            errors.append("BOARD_LCD_ENABLE requires FW_USE_DISPLAY")
-        instance = val("BOARD_LCD_SPI_INSTANCE")
-        if instance not in (1, 2, 3):
-            errors.append(f"BOARD_LCD_SPI_INSTANCE must be 1..3, got {instance}")
-        elif not enabled(f"FW_USING_SPI{instance}"):
-            errors.append(f"LCD uses spi{instance} but FW_USING_SPI{instance}=n")
-        for prefix in ("CS", "DC", "RES", "BL"):
-            add_pin(f"LCD_{prefix}", f"BOARD_LCD_{prefix}_PORT", f"BOARD_LCD_{prefix}_PIN")
-
-    # 引脚冲突检测：两两比较所有已登记引脚。
-    for index, (port, pin, label) in enumerate(used):
-        for other_port, other_pin, other_label in used[index + 1:]:
-            if (port, pin) == (other_port, other_pin):
-                errors.append(f"{label} and {other_label} both use P{port}{pin}")
-
-    # DMA 路径尚未实现；与其静默忽略，不如在生成阶段直接拒绝。
-    if enabled("BOARD_UART_DMA"):
-        errors.append("BOARD_UART_DMA is not implemented in v2 yet; keep it n")
+    worker_stack = val("APP_WORKER_TASK_STACK_SIZE")
+    if worker_stack % 8 != 0:
+        errors.append(
+            f"APP_WORKER_TASK_STACK_SIZE must be a multiple of 8, got {worker_stack}")
 
     return errors
 
@@ -421,12 +418,35 @@ def main(argv: list[str]) -> int:
     symbols = collect_symbols(kconf)
 
     errors = validate(symbols)
+    for name in unknown_config_keys(config_path, kconf):
+        errors.append(f"unknown/removed .config key CONFIG_{name}; clean this profile")
+
+    profile_file = config_path.parent / "profile.json"
+    loaded = None
+    analysis = {"errors": [], "clock": {}, "used": {}, "routes": {}}
+    if profile_file.is_file():
+        loaded = boardgen.load_profile(config_path.parent)
+        if loaded.get("platform") != "host":
+            analysis = boardgen.analyze(loaded, symbols)
+            errors.extend(analysis["errors"])
+    else:
+        errors.append(f"missing profile selector {profile_file}")
+
     if errors:
         for error in errors:
             print(f"genconfig: {error}", file=sys.stderr)
         return 1
 
-    outputs = generate(symbols, outdir)
+    board_symbols = {}
+    if loaded is not None and loaded.get("platform") != "host":
+        board_symbols = boardgen.build_symbols(loaded, symbols, analysis)
+    merged = dict(symbols)
+    merged.update(board_symbols)
+
+    outputs = generate(merged, outdir)
+    if loaded is not None and loaded.get("platform") != "host":
+        outputs["board_memory.ld"] = boardgen.render_memory_ld(loaded, merged)
+        outputs.update(boardgen.generate_extra(loaded, symbols, analysis))
 
     # --check：逐个比较内容；任何缺失/不一致都视为 STALE。
     if args.check:

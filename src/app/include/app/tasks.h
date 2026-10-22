@@ -4,7 +4,7 @@
  * 层级：src/app/task（公共头位于 src/app/include/app）
  * 职责：
  *   1. 初始化任务管理器并 adopt main；
- *   2. 创建/启动 app_rpc 静态任务；
+ *   2. 创建/启动 app_rpc 静态任务和可控 worker 任务；
  *   3. 向 main 暴露 manager 与 app_rpc 实例。
  *
  * 上下文：app_tasks_init/start 在 main 线程、调度器启动后调用。
@@ -22,7 +22,7 @@
  */
 fw_status_t app_tasks_init(void);
 
-/* 启动 app_rpc 任务。 */
+/* 启动 worker 和 app_rpc 任务。 */
 fw_status_t app_tasks_start(void);
 
 /* 任务管理器；app_tasks_init 之前返回的对象尚未初始化。 */

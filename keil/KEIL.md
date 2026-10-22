@@ -3,16 +3,13 @@
 工程文件：
 
 ```text
-keil/stm32f407ve.uvprojx
+keil/stm32f407ve.uvprojx       # profiles/f407ve (HSI 16 MHz)
+keil/stm32f407ve-hse.uvprojx   # profiles/f407ve-hse (HSE 168 MHz)
 ```
 
-工程由 `project/sources.json` 和 `keil/project_template.uvprojx` 生成；配置与
-CMake 目标构建共用：
-
-```text
-profiles/f407ve/.config
-profiles/f407ve/generated/
-```
+工程由 `project/sources.json`、`profiles/<profile>/generated/board_keil.json`
+和 `keil/project_template.uvprojx` 生成；配置与 CMake 目标构建共用同一
+profile 与 board/chip manifest。
 
 不再有 `keil/.config` 或 `keil/generated/`。
 
@@ -49,10 +46,11 @@ python tools/fwconfig.py sync --profile f407ve
 python tools/fwconfig.py gen-keil --profile f407ve
 ```
 
-- `sync` 只更新 `profiles/f407ve/.config` 对应的 generated 头文件和
-  `board_memory.ld`；
-- `gen-keil` 从 manifest + 模板重新生成 uvprojx，并从
-  `board_config.h` 的 FLASH/RAM 大小生成 `stm32f407ve.sct`。
+- `sync` 更新 generated 头文件、`board_memory.ld`、`board_desc.h`、
+  `board_keil.json` 和 `board_summary.txt`；
+- `gen-keil` 从 source manifest + `board_keil.json` + 模板生成 uvprojx，
+  Device/Vendor/Cpu/Flash 算法/IRAM/IROM/CLOCK 都由 manifest 驱动；
+  同时生成 profile 对应的 `.sct` 和启动文件 `Stack_Size`。
 
 交互式修改 Keil 使用的配置：
 
@@ -103,9 +101,10 @@ UV4.exe -f keil\stm32f407ve.uvprojx -j0
 |---|---|
 | `project_template.uvprojx` | 固定 AC5/器件/scatter/输出选项的模板 |
 | `stm32f407ve.uvprojx` | 由 `tools/gen_keil.py` 生成的工程 |
-| `startup_stm32f407xx.s` | ARM 语法启动文件，Stack_Size = 0x1000（需与 `BOARD_MIN_STACK_SIZE` 一致） |
+| `startup_stm32f407xx.s` | 由 `BOARD_MIN_STACK_SIZE` 生成 `Stack_Size`，不要手改 |
 | `scatter_template.sct` | scatter 模板，占位符由 `gen_keil.py` 替换 |
-| `stm32f407ve.sct` | 由 `board_config.h` 的 FLASH/RAM 大小生成 |
+| `stm32f407ve*.sct` | 由 `board_keil.json` 的地址/大小按 profile 生成 |
+| `board_keil.json` | 由 board/chip manifest 生成，含 Device/Cpu/FlashDll/IRAM/IROM/CLOCK |
 
 `profiles/f407ve/generated/` 是 include 路径中的配置头文件。
 

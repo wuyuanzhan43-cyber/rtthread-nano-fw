@@ -92,8 +92,8 @@ fw_status_t fw_spi_register(fw_spi_t *spi, const char *name,
                             const fw_spi_config_t *config)
 {
     fw_status_t result;
-    if (spi == NULL || name == NULL || drv == NULL || config == NULL)
-        return FW_EINVAL;
+    if (spi == NULL || name == NULL || drv == NULL || drv->ops == NULL ||
+        config == NULL) return FW_EINVAL;
     if (drv->type != FW_DEV_TYPE_SPI) return FW_EINVAL;
 
     result = fw_dev_register(&spi->dev, name, FW_DEV_TYPE_SPI, drv);

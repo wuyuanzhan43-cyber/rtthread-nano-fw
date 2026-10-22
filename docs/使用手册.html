@@ -1186,7 +1186,7 @@ td.pin { font-family: var(--mono); white-space: nowrap; color: var(--accent-2); 
           <span class="chip chip--accent"><strong>RT-Thread Nano</strong> 3.1.5</span>
           <span class="chip"><strong>MCU</strong> STM32F407VE</span>
           <span class="chip"><strong>BUILD</strong> CMake + Keil AC5</span>
-          <span class="chip chip--ok"><strong>HOST</strong> 6/6 PASS</span>
+          <span class="chip chip--ok"><strong>HOST</strong> 9/9 PASS</span>
           <span class="chip chip--ok"><strong>KEIL</strong> 0E / 0W</span>
         </div>
       </div>
@@ -1604,17 +1604,16 @@ python tools/fwconfig.py gen-keil --profile f407ve</code></pre>
         <table>
           <thead><tr><th>选项</th><th>默认</th><th>说明</th></tr></thead>
           <tbody>
-            <tr><td><span class="kv">BOARD_CLOCK_HSI_16</span></td><td>y</td><td>HSI 16 MHz，无需外部晶振</td></tr>
-            <tr><td><span class="kv">BOARD_CLOCK_HSE_8_168</span></td><td>n</td><td>HSE → PLL → 168 MHz</td></tr>
-            <tr><td><span class="kv">BOARD_NAME / BOARD_VERSION</span></td><td>STM32F407VE / 0.2.0</td><td>板卡身份与启动横幅</td></tr>
-            <tr><td><span class="kv">BOARD_FLASH/RAM/CCM_SIZE_KB</span></td><td>512/128/64</td><td>链接区域大小</td></tr>
+            <tr><td><span class="kv">profile.json</span></td><td>hsi16</td><td>选择 board/chip/clock variant；f407ve-hse 用 hse_8_168</td></tr>
+            <tr><td><span class="kv">boards/&lt;board&gt;/board.json</span></td><td>STM32F407VE</td><td>板卡身份、接线、设备绑定</td></tr>
+            <tr><td><span class="kv">chips/&lt;chip&gt;.json</span></td><td>512/128/64</td><td>内存、AF 矩阵、DMA/EXTI 能力</td></tr>
             <tr><td><span class="kv">BOARD_MIN_STACK_SIZE</span></td><td>4096</td><td>主栈/中断栈预留</td></tr>
-            <tr><td><span class="kv">BOARD_CONSOLE_UART1/2/3</span></td><td>UART1</td><td>控制台串口选择</td></tr>
+            <tr><td><span class="kv">board.json devices.console</span></td><td>serial1</td><td>控制台绑定</td></tr>
             <tr><td><span class="kv">FW_USING_UART1..3</span></td><td>UART1=y</td><td>逐实例启用 serialN</td></tr>
             <tr><td><span class="kv">FW_USING_SPI1..3</span></td><td>SPI1=y</td><td>逐实例启用 spiN</td></tr>
             <tr><td><span class="kv">FW_SERIAL_RX_BUFSZ</span></td><td>512</td><td>每实例 RX ring</td></tr>
             <tr><td><span class="kv">FW_SERIAL_TX_BUFSZ</span></td><td>512</td><td>每实例 TX ring</td></tr>
-            <tr><td><span class="kv">BOARD_UART_DMA</span></td><td>n</td><td>预留；当前必须为 n</td></tr>
+            <tr><td><span class="kv">DMA/EXTI</span></td><td>默认关闭</td><td>按实例 DMA 与 pin EXTI；<code>f407ve-dma</code> 启用</td></tr>
             <tr><td><span class="kv">BOARD_LCD_ENABLE</span></td><td>y</td><td>ST7735S 显示设备</td></tr>
             <tr><td><span class="kv">APP_BOOT_DISPLAY</span></td><td>y</td><td>是否绘制启动画面</td></tr>
             <tr><td><span class="kv">APP_BOOT_BARS/IMAGE/WHITE</span></td><td>IMAGE</td><td>色条 / 头像 / 纯白</td></tr>
@@ -1720,7 +1719,7 @@ rpc 任务
         <li>TX：任务写 ring → 驱动 start_tx → TXE 中断继续搬运。</li>
         <li>USART IRQ 在 <span class="kv">drv_serial.c</span> 内按 <span class="kv">FW_USING_UARTn</span> 定义。</li>
         <li>serial class 通过 driver 的 lock/unlock（PRIMASK）保护 ring。</li>
-        <li>DMA 当前未实现；<span class="kv">BOARD_UART_DMA</span> 必须为 n。</li>
+        <li>DMA/EXTI 框架已实现，默认走 IT；<code>f407ve-dma</code> 启用 UART1 DMA 与 pin EXTI。</li>
       </ul>
 
       <h3>LCD</h3>
@@ -2041,9 +2040,9 @@ python src/tests/hil/test_protocol.py --port COM7 --stats</code></pre>
         <li>顶层 Kconfig 增加平台 choice，CMake 增加对应分支。</li>
       </ul>
 
-      <h3>UART DMA（后续工作）</h3>
+      <h3>UART DMA / EXTI（默认关闭）</h3>
       <p>
-        当前 <span class="kv">BOARD_UART_DMA</span> 只是预留项，generation 会拒绝开启。
+        DMA/EXTI 框架已实现，默认走 IT；<code>f407ve-dma</code> 启用 UART1 DMA 与 pin EXTI，时序需上板验证。
         实现时保持现有 API 不变，在 drv_serial 内增加 RX DMA + IDLE、TX DMA 完成回调，
         并保留 IT 回退路径。
       </p>
@@ -2087,9 +2086,9 @@ python src/tests/hil/test_protocol.py --port COM7 --stats</code></pre>
         <table>
           <thead><tr><th>检查</th><th>结果</th></tr></thead>
           <tbody>
-            <tr><td>Host CTest</td><td><span class="ok">6/6 passed</span></td></tr>
-            <tr><td>F407 HSI build</td><td><span class="ok">Flash 95,436 B / RAM 14,896 B</span></td></tr>
-            <tr><td>F407 HSE build</td><td><span class="ok">Flash 95,436 B / RAM 14,896 B</span></td></tr>
+            <tr><td>Host CTest</td><td><span class="ok">9/9 passed</span></td></tr>
+            <tr><td>F407 HSI build</td><td><span class="ok">Flash 105,496 B / RAM 16,808 B</span></td></tr>
+            <tr><td>F407 HSE build</td><td><span class="ok">Flash 105,496 B / RAM 16,808 B</span></td></tr>
             <tr><td>Keil AC5 build</td><td><span class="warn">重构前基线 0 Error / 0 Warning；重构后工程已重新生成，待 UV4 复验</span></td></tr>
             <tr><td>关键符号</td><td><span class="ok">entry / SysTick / console / PendSV / HardFault 均正确</span></td></tr>
             <tr><td>Kconfig-only 扩展</td><td><span class="ok">UART2 + SPI2 + LED PE3，仅改配置；CMake 已覆盖，Keil 需复验</span></td></tr>

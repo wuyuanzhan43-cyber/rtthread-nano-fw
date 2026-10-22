@@ -196,7 +196,12 @@ fw_task_t *fw_task_adopt(fw_task_manager_t *manager,
         return NULL;
     }
 
-    (void)manager->port->snapshot(manager->port->ctx, task->os_task, &os);
+    /* 快照失败时不要把未初始化的 os 写进任务表。 */
+    memset(&os, 0, sizeof(os));
+    if (manager->port->snapshot(manager->port->ctx, task->os_task, &os) != FW_OK) {
+        memset(task, 0, sizeof(*task));
+        return NULL;
+    }
     task->priority = os.priority;
     task->stack_size = os.stack_size;
     task->stack_used = os.stack_used;
@@ -571,6 +576,7 @@ fw_status_t fw_task_control(fw_task_manager_t *manager, size_t index,
     bool controllable;
     bool started;
     bool user_suspended;
+    bool pending;
     bool closed;
 
     if (manager == NULL || !manager->initialized || index >= manager->count)
@@ -593,15 +599,34 @@ fw_status_t fw_task_control(fw_task_manager_t *manager, size_t index,
         current = manager->port->current_thread(manager->port->ctx);
         if (task->os_task == current) return FW_EBUSY;
         state = critical_enter(manager);
-        if (!task->user_suspended) task->suspend_pending = true;
+        if (!task->user_suspended && !task->suspend_pending)
+            task->suspend_pending = true;
         critical_exit(manager, state);
         return FW_OK;
 
     case FW_TASK_CTRL_RESUME:
         if (!controllable) return FW_ENOTSUP;
+
+        state = critical_enter(manager);
+        pending = task->suspend_pending;
+        user_suspended = task->user_suspended;
+        /* RESUME 也承担“取消尚未执行的 SUSPEND”的语义。 */
+        task->suspend_pending = false;
+        critical_exit(manager, state);
+
+        /* 目标任务还没真正挂起：取消 pending 即可。 */
+        if (pending && !user_suspended) return FW_OK;
         if (!user_suspended) return FW_EBUSY;
+
+        /*
+         * user_suspended 在调用 port->suspend 之前置位，存在一个极小的
+         * “已标记但尚未真正 suspend”的窗口。此时 resume 可能失败；
+         * 返回 EBUSY 让调用者重试，并保留 user_suspended，
+         * 否则任务会永久停在挂起状态且健康度无法发现。
+         */
         if (manager->port->resume(manager->port->ctx, task->os_task) != FW_OK)
-            return FW_EIO;
+            return FW_EBUSY;
+
         state = critical_enter(manager);
         task->user_suspended = false;
         task->last_heartbeat_ms = manager_now_ms(manager);
@@ -613,7 +638,9 @@ fw_status_t fw_task_control(fw_task_manager_t *manager, size_t index,
         if (value >= manager->priority_max) return FW_EINVAL;
         if (manager->port->set_priority(manager->port->ctx, task->os_task,
                                         value) != FW_OK) return FW_EIO;
+        state = critical_enter(manager);
         task->priority = value;
+        critical_exit(manager, state);
         return FW_OK;
 
     default:

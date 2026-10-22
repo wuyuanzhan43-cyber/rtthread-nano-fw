@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
 import re
 import sys
@@ -28,6 +29,7 @@ TEMPLATE = ROOT / "keil" / "project_template.uvprojx"
 DEFAULT_OUTPUT = ROOT / "keil" / "stm32f407ve.uvprojx"
 SCATTER_TEMPLATE = ROOT / "keil" / "scatter_template.sct"
 DEFAULT_SCATTER = ROOT / "keil" / "stm32f407ve.sct"
+STARTUP = ROOT / "keil" / "startup_stm32f407xx.s"
 
 # uVision 工程里的路径分隔符。
 BS = "\\"
@@ -94,7 +96,26 @@ def group_xml(name: str, sources: list[str]) -> list[str]:
     return lines
 
 
-def render(manifest: dict, profile: str) -> str:
+def _keil_info(profile: str) -> dict:
+    """读取 profiles/<profile>/generated/board_keil.json。"""
+    path = ROOT / "profiles" / profile / "generated" / "board_keil.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise SystemExit(f"gen_keil: missing {path.relative_to(ROOT)}")
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"gen_keil: invalid {path.relative_to(ROOT)}: {error}")
+
+
+def _display_path(path: pathlib.Path) -> str:
+    try:
+        return str(path.resolve().relative_to(ROOT))
+    except ValueError:
+        return str(path.resolve())
+
+
+def render(manifest: dict, profile: str, keil_info: dict,
+           scatter_name: str) -> str:
     """根据 manifest 和模板渲染完整 uvprojx 文本。
 
     分组映射与 CMake 目标大致对应，但 Keil 需要把“同一目录下的源文件”
@@ -158,31 +179,79 @@ def render(manifest: dict, profile: str) -> str:
     if count != 1:
         raise SystemExit("template has no C define section")
 
+    replacements = {
+        "@DEVICE@": keil_info["device"],
+        "@VENDOR@": keil_info["vendor"],
+        "@CPU@": keil_info["cpu"],
+        "@FLASH_DLL@": keil_info["flash_dll"],
+        "@REGISTER_FILE@": keil_info["register_file"],
+        "@SVD_FILE@": keil_info["svd_file"],
+        "@FLASH_ORIGIN@": keil_info["flash_origin"],
+        "@RAM_ORIGIN@": keil_info["ram_origin"],
+        "@FLASH_SIZE@": keil_info["flash_size"],
+        "@RAM_SIZE@": keil_info["ram_size"],
+        "@FLASH_ORIGIN_BARE@": keil_info["flash_origin_bare"],
+        "@FLASH_SIZE_BARE@": keil_info["flash_size_bare"],
+        "@RAM_SIZE_BARE@": keil_info["ram_size_bare"],
+        "@SCATTER_NAME@": scatter_name,
+        "@BOARD_ID@": keil_info["board_id"],
+    }
+    for key, value in replacements.items():
+        text = text.replace(key, str(value))
+    leftover = re.findall(r"@[A-Z0-9_]+@", text)
+    if leftover:
+        raise SystemExit(f"template placeholders not replaced: {sorted(set(leftover))}")
     return text
 
 
 def _board_memory_value(text: str, name: str) -> int:
-    """从生成的 board_config.h 读取整型 BOARD_* 值。"""
-    match = re.search(rf"#define\s+{name}\s+(\d+)", text)
+    """从生成的 board_config.h 读取整型/十六进制 BOARD_* 值。"""
+    match = re.search(rf"#define\s+{name}\s+(0x[0-9A-Fa-f]+|\d+)", text)
     if match is None:
         raise SystemExit(f"gen_keil: board_config.h is missing {name}")
-    return int(match.group(1))
+    return int(match.group(1), 0)
 
 
-def render_scatter(profile: str) -> str:
-    """用 board_config.h 的 FLASH/RAM 大小渲染 Keil scatter。"""
+def _board_config_text(profile: str) -> str:
+    """读取 profiles/<profile>/generated/board_config.h。"""
     config = ROOT / "profiles" / profile / "generated" / "board_config.h"
     try:
-        text = config.read_text(encoding="utf-8")
+        return config.read_text(encoding="utf-8")
     except FileNotFoundError:
         raise SystemExit(f"gen_keil: missing {config.relative_to(ROOT)}")
 
-    flash_bytes = _board_memory_value(text, "BOARD_FLASH_SIZE_KB") * 1024
-    ram_bytes = _board_memory_value(text, "BOARD_RAM_SIZE_KB") * 1024
+
+def render_scatter(keil_info: dict) -> str:
+    """用 board_keil.json 的地址和大小渲染 Keil scatter。"""
     template = SCATTER_TEMPLATE.read_text(encoding="utf-8")
     return (template
-            .replace("@FLASH_SIZE@", f"0x{flash_bytes:08X}")
-            .replace("@RAM_SIZE@", f"0x{ram_bytes:08X}"))
+            .replace("@FLASH_ORIGIN@", str(keil_info["flash_origin"]))
+            .replace("@RAM_ORIGIN@", str(keil_info["ram_origin"]))
+            .replace("@FLASH_SIZE@", str(keil_info["flash_size"]))
+            .replace("@RAM_SIZE@", str(keil_info["ram_size"])))
+
+
+def render_startup(profile: str) -> bytes:
+    """把 board_config.h 的 BOARD_MIN_STACK_SIZE 同步到 Keil 启动文件。
+
+    只替换 Stack_Size 一行，并保留原文件的 CRLF/LF，避免整文件行尾变化。
+    """
+    text = _board_config_text(profile)
+    stack_size = _board_memory_value(text, "BOARD_MIN_STACK_SIZE")
+    try:
+        raw = STARTUP.read_bytes()
+    except FileNotFoundError:
+        raise SystemExit(f"gen_keil: missing {STARTUP.relative_to(ROOT)}")
+
+    pattern = rb"(?m)^(\s*Stack_Size\s+EQU\s+)0x[0-9A-Fa-f]+"
+    rendered, count = re.subn(
+        pattern,
+        lambda match: match.group(1) + f"0x{stack_size:08X}".encode("ascii"),
+        raw,
+        count=1)
+    if count != 1:
+        raise SystemExit("gen_keil: startup has no Stack_Size EQU line")
+    return rendered
 
 
 def main(argv: list[str]) -> int:
@@ -195,27 +264,44 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", default="f407ve")
     parser.add_argument("--check", action="store_true")
-    parser.add_argument("--output", default=str(DEFAULT_OUTPUT))
+    parser.add_argument("--output", default=None,
+                        help="uvprojx 输出路径；默认按 profile 派生")
     args = parser.parse_args(argv)
 
-    expected = render(load_manifest(), args.profile)
-    scatter = render_scatter(args.profile)
-    output = pathlib.Path(args.output)
-    scatter_output = DEFAULT_SCATTER
+    if args.profile == "f407ve":
+        suffix = ""
+    elif args.profile.startswith("f407ve-"):
+        suffix = "-" + args.profile[len("f407ve-"):]
+    else:
+        suffix = "-" + args.profile
+    default_output = ROOT / "keil" / f"stm32f407ve{suffix}.uvprojx"
+    scatter_output = ROOT / "keil" / f"stm32f407ve{suffix}.sct"
+    output = pathlib.Path(args.output) if args.output else default_output
+
+    keil_info = _keil_info(args.profile)
+    expected = render(load_manifest(), args.profile, keil_info,
+                      scatter_output.name)
+    scatter = render_scatter(keil_info)
+    startup = render_startup(args.profile)
 
     if args.check:
         try:
             current = output.read_text(encoding="utf-8-sig")
             current_scatter = scatter_output.read_text(encoding="utf-8-sig")
+            current_startup = STARTUP.read_bytes()
         except FileNotFoundError as error:
             print(f"gen_keil: missing {error.filename}", file=sys.stderr)
             return 1
         if current != expected:
-            print(f"gen_keil: {output.relative_to(ROOT)} is stale; run tools/gen_keil.py",
+            print(f"gen_keil: {_display_path(output)} is stale; run tools/gen_keil.py",
                   file=sys.stderr)
             return 1
         if current_scatter != scatter:
-            print(f"gen_keil: {scatter_output.relative_to(ROOT)} is stale; run tools/gen_keil.py",
+            print(f"gen_keil: {_display_path(scatter_output)} is stale; run tools/gen_keil.py",
+                  file=sys.stderr)
+            return 1
+        if current_startup != startup:
+            print(f"gen_keil: {_display_path(STARTUP)} is stale; run tools/gen_keil.py",
                   file=sys.stderr)
             return 1
         print("gen_keil: OK")
@@ -226,7 +312,9 @@ def main(argv: list[str]) -> int:
         handle.write(expected)
     with scatter_output.open("w", encoding="utf-8", newline="\r\n") as handle:
         handle.write(scatter)
-    print(f"gen_keil: wrote {output.relative_to(ROOT)} and {scatter_output.relative_to(ROOT)}")
+    STARTUP.write_bytes(startup)
+    print(f"gen_keil: wrote {_display_path(output)}, "
+          f"{_display_path(scatter_output)}, {_display_path(STARTUP)}")
     return 0
 
 

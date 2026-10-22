@@ -115,6 +115,14 @@ static void fake_serial_unlock(fw_dev_t *dev, int level)
     (void)level;
 }
 
+/* 假串口没有在途 DMA，flush 直接成功；ring 清空由类层完成。 */
+static int fake_serial_flush(fw_dev_t *dev, bool rx)
+{
+    (void)dev;
+    (void)rx;
+    return FW_OK;
+}
+
 /* 串口驱动 ops 表，字段顺序与 fw_serial_ops_t 一致。 */
 static const fw_serial_ops_t fake_serial_ops = {
     fake_serial_configure,
@@ -124,7 +132,8 @@ static const fw_serial_ops_t fake_serial_ops = {
     fake_serial_stop_tx,
     fake_serial_wait_rx,
     fake_serial_lock,
-    fake_serial_unlock
+    fake_serial_unlock,
+    fake_serial_flush
 };
 
 static const fw_drv_t fake_serial_drv = {
@@ -159,10 +168,44 @@ static int fake_pin_write(fw_dev_t *dev, int number, int value)
     return FW_OK;
 }
 
+/*
+ * 假 EXTI 配置：只记录调用，不模拟硬件位。
+ * 真正的中断注入由 host_pin_inject_irq 调用 fw_dev_isr 完成，
+ * 这样测试覆盖 pin 类回调表与驱动 ISR 分派两层语义。
+ */
+static int fake_pin_attach_irq(fw_dev_t *dev, int number, int mode)
+{
+    fw_host_t *host = FW_CONTAINER_OF(dev, fw_host_t, pin.dev);
+    (void)number;
+    (void)mode;
+    ++host->pin_irq_attaches;
+    return FW_OK;
+}
+
+static int fake_pin_detach_irq(fw_dev_t *dev, int number)
+{
+    fw_host_t *host = FW_CONTAINER_OF(dev, fw_host_t, pin.dev);
+    (void)number;
+    ++host->pin_irq_detaches;
+    return FW_OK;
+}
+
+static int fake_pin_enable_irq(fw_dev_t *dev, int number, bool enable)
+{
+    fw_host_t *host = FW_CONTAINER_OF(dev, fw_host_t, pin.dev);
+    (void)number;
+    (void)enable;
+    ++host->pin_irq_enables;
+    return FW_OK;
+}
+
 static const fw_pin_ops_t fake_pin_ops = {
     fake_pin_configure,
     fake_pin_read,
-    fake_pin_write
+    fake_pin_write,
+    fake_pin_attach_irq,
+    fake_pin_detach_irq,
+    fake_pin_enable_irq
 };
 
 static const fw_drv_t fake_pin_drv = {
@@ -272,6 +315,21 @@ static size_t rx_available(const fw_host_t *host)
 size_t host_serial_rx_available(const fw_host_t *host)
 {
     return rx_available(host);
+}
+
+/*
+ * 注入一次 pin 边沿事件。
+ *
+ * 不直接调用应用回调，而是走 fw_dev_isr -> pin 类 isr -> 回调表，
+ * 这样 Host 测试验证的是与真实驱动相同的分派路径。
+ */
+int host_pin_inject_irq(fw_host_t *host, int number, int mode)
+{
+    fw_dev_t *dev = fw_dev_find("pin");
+    (void)mode;
+    (void)host;
+    if (dev == NULL) return FW_ENODEV;
+    return fw_dev_isr(dev, FW_ISR_PIN_EDGE, &number);
 }
 
 /*

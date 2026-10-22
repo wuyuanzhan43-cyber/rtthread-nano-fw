@@ -172,6 +172,13 @@ bool fw_parser_push(fw_parser_t *parser, uint8_t byte, fw_message_t *message)
         break;
 
     case READ_BODY:
+        /* 正常路径不会越界（LEN 已限制），这里保留防御性检查，
+         * 防止状态被外部破坏后继续写 body。 */
+        if (parser->used >= sizeof(parser->body)) {
+            ++parser->bad_length;
+            fw_parser_reset(parser);
+            break;
+        }
         parser->body[parser->used++] = byte;
         /* body[0] 是 LEN；再加上 SEQ 和 CMD 两个字节。 */
         if (parser->used == (size_t)parser->body[0] + 3U) {

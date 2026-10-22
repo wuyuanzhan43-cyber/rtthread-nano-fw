@@ -55,10 +55,28 @@ void rt_hw_console_output(const char *str)
     if (console == NULL || str == NULL) return;
     length = strlen(str);
 
-    if (console->started) {
+    if (!console->started) {
+        /*
+         * 调度器启动前 UART 中断尚未使能，只能轮询 DR。
+         * 这条路径也用于 board_devices_init 之前的启动诊断。
+         */
+        console_poll_write(console, (const uint8_t *)str, length);
+        return;
+    }
+
+    /*
+     * 运行期：
+     *   - 任务上下文：正常写 ring；IT/DMA 路径由驱动决定；
+     *   - 中断上下文 + IT 路径：写 ring 并打开 TXE，允许非阻塞；
+     *   - 中断上下文 + DMA 路径：HAL DMA API 不适合从任意 ISR 启动，
+     *     而且直接轮询 DR 会和 DMA 抢数据。这里选择丢弃该行诊断，
+     *     避免在中断里引入不可预测的 HAL 状态机。
+     */
+    if (rt_interrupt_get_nest() == 0U) {
         (void)fw_dev_write(&console->base.dev, 0, (const uint8_t *)str,
                            length, FW_NO_WAIT);
-    } else {
-        console_poll_write(console, (const uint8_t *)str, length);
+    } else if (!console->dma_tx_enabled) {
+        (void)fw_dev_write(&console->base.dev, 0, (const uint8_t *)str,
+                           length, FW_NO_WAIT);
     }
 }

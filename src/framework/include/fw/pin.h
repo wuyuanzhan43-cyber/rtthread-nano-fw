@@ -5,11 +5,13 @@
  * 职责：
  *   1. 用一个名为 "pin" 的设备覆盖芯片所有 GPIO；
  *   2. 用 offset（引脚号）区分具体引脚，而不是为每个引脚创建对象；
- *   3. 提供读电平、写电平、切换输入/输出/模拟模式三个动作。
+ *   3. 提供读电平、写电平、切换输入/输出/模拟模式；
+ *   4. 提供 EXTI attach/detach/enable 和 ISR 回调分派。
  *
  * 上下文：
  *   - read/write 只访问寄存器，可在任务或 ISR 中调用；
- *   - configure 会调用 HAL_GPIO_Init，只在任务上下文调用。
+ *   - configure/attach/detach 会配置硬件，只在任务上下文调用；
+ *   - isr 由驱动在 EXTI 中断中调用，回调必须非阻塞。
  *
  * 依赖：fw/dev.h。
  *
@@ -22,7 +24,17 @@
 #ifndef FW_PIN_H
 #define FW_PIN_H
 
+#include <stdbool.h>
 #include "fw/dev.h"
+
+/*
+ * 静态 IRQ 回调表容量；可由 Kconfig 的 FW_PIN_IRQ_MAX 覆盖。
+ * 一条表项对应一个已 attach 的引脚，而不是一条 EXTI 线；
+ * 硬件仍只有 16 条 EXTI 线，容量超过 16 时兼容层会拒绝 attach。
+ */
+#ifndef FW_PIN_IRQ_MAX
+#define FW_PIN_IRQ_MAX 8
+#endif
 
 /*
  * 引脚工作模式。
@@ -51,28 +63,66 @@ typedef struct {
     int mode; /* FW_PIN_MODE_* */
 } fw_pin_config_t;
 
+/* EXTI 触发沿。BOTH 是 RISING|FALLING 的位组合。 */
+#define FW_PIN_IRQ_RISING  0x01
+#define FW_PIN_IRQ_FALLING 0x02
+#define FW_PIN_IRQ_BOTH    (FW_PIN_IRQ_RISING | FW_PIN_IRQ_FALLING)
+
+/* 驱动向类上报的 ISR 事件；args 指向 int number。 */
+#define FW_ISR_PIN_EDGE 0x01
+
+/*
+ * 引脚边沿回调。
+ *
+ * number - 触发中断的引脚编号（FW_PIN_NUMBER 编码）；
+ * mode   - attach 时声明的 FW_PIN_IRQ_* 触发方式；
+ * user   - 调用者私有指针。
+ *
+ * 回调在 ISR 上下文执行，禁止阻塞、禁止调用 rt_thread_mdelay 等 API；
+ * 需要唤醒任务时，在回调里 rt_event_send / 释放信号量，把处理放到任务。
+ */
+typedef void (*fw_pin_irq_cb_t)(fw_dev_t *dev, int number, int mode,
+                                void *user);
+
+/* 类层的静态回调表项；驱动只负责硬件，不保存回调。 */
+typedef struct {
+    bool used;
+    int number;
+    int mode;
+    fw_pin_irq_cb_t callback;
+    void *user;
+} fw_pin_irq_entry_t;
+
 /*
  * pin 驱动操作集（第二层 ops）。
  *
  * 这些函数由 bsp 驱动实现，参数中的 number 已经由类从 offset 传入。
- *   configure - 配置某个引脚的模式；
- *   read      - 返回 0/1 电平，失败返回负错误码；
- *   write     - value 非 0 输出高电平，0 输出低电平。
+ *   configure  - 配置某个引脚的模式；
+ *   read/write - 读/写电平；
+ *   attach_irq - 让硬件开始监听某个引脚的边沿（驱动只需配置 EXTI）；
+ *   detach_irq - 停止监听并释放 EXTI 线；
+ *   enable_irq - 临时屏蔽/恢复某条线，不改变回调绑定。
+ *
+ * 新增函数追加在末尾，保持已有驱动/假设备的位置初始化顺序不变。
  */
 typedef struct {
     int (*configure)(fw_dev_t *dev, int number, int mode);
     int (*read)(fw_dev_t *dev, int number);
     int (*write)(fw_dev_t *dev, int number, int value);
+    int (*attach_irq)(fw_dev_t *dev, int number, int mode);
+    int (*detach_irq)(fw_dev_t *dev, int number);
+    int (*enable_irq)(fw_dev_t *dev, int number, bool enable);
 } fw_pin_ops_t;
 
 /*
  * pin 设备对象。
  *
- * 只有一个 fw_dev_t 基类成员，不需要额外状态：
- * 引脚号通过 read/write 的 offset 传入，硬件映射由驱动查表完成。
+ * dev 是基类；entries 是类层 IRQ 回调表，静态分配。驱动在 EXTI ISR 中
+ * 通过 fw_dev_isr 上报引脚号，类在这里找到回调并执行。
  */
 typedef struct {
     fw_dev_t dev;
+    fw_pin_irq_entry_t entries[FW_PIN_IRQ_MAX];
 } fw_pin_t;
 
 /*
@@ -107,5 +157,20 @@ int fw_pin_read(fw_dev_t *dev, int number);
 
 /* 写单个引脚电平；value 非 0 为高，0 为低。 */
 int fw_pin_write(fw_dev_t *dev, int number, int value);
+
+/*
+ * 绑定/解绑边沿回调。
+ *
+ * attach 会占用一条静态表项和一条硬件 EXTI 线；同一条 EXTI 线（相同
+ * 引脚号、不同端口）只能有一个 owner，冲突返回 FW_EBUSY。
+ * attach 只配置 EXTI，不改变 GPIO 模式；调用前应先
+ * fw_pin_configure(dev, number, FW_PIN_MODE_INPUT_UP/DOWN/INPUT)。
+ * detach 会清除硬件监听并释放表项。
+ * 回调在 ISR 上下文执行，必须非阻塞。
+ */
+fw_status_t fw_pin_attach_irq(fw_dev_t *dev, int number, int mode,
+                              fw_pin_irq_cb_t callback, void *user);
+fw_status_t fw_pin_detach_irq(fw_dev_t *dev, int number);
+fw_status_t fw_pin_irq_enable(fw_dev_t *dev, int number, bool enable);
 
 #endif

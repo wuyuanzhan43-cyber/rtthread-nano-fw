@@ -30,6 +30,9 @@ import shutil
 import subprocess
 import sys
 
+import boardgen
+import genconfig as genconfig_mod
+
 # 项目根目录 = tools/ 的上一级；后续所有路径都从这里派生。
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PROFILES = ROOT / "profiles"
@@ -177,6 +180,35 @@ def check_layout() -> int:
             print(f"layout: {error}", file=sys.stderr)
         return 1
     print("layout: OK (profiles only)")
+    return 0
+
+
+def check_boards() -> int:
+    """校验所有 profile 引用的 chip/board manifest 与 Kconfig 组合。"""
+    errors: list[str] = []
+    for name in all_profiles():
+        base, _, config, _ = profile_dirs(name)
+        profile_file = base / "profile.json"
+        if not profile_file.is_file():
+            errors.append(f"{name}: missing {profile_file.relative_to(ROOT)}")
+            continue
+        loaded = boardgen.load_profile(base)
+        if loaded.get("platform") == "host":
+            continue
+        if not config.is_file():
+            errors.append(f"{name}: missing {config.relative_to(ROOT)}")
+            continue
+        kconf = genconfig_mod.load_kconfig(KCONFIG)
+        kconf.load_config(str(config))
+        symbols = genconfig_mod.collect_symbols(kconf)
+        for error in boardgen.analyze(loaded, symbols)["errors"]:
+            errors.append(f"{name}: {error}")
+
+    if errors:
+        for error in errors:
+            print(f"boards: {error}", file=sys.stderr)
+        return 1
+    print("boards: OK (manifests + Kconfig)")
     return 0
 
 
@@ -367,6 +399,7 @@ def main(argv: list[str]) -> int:
     sub.add_parser("check-layout", help="reject legacy config and source paths")
     sub.add_parser("check-manifest", help="verify sources.json paths and coverage")
     sub.add_parser("check-hygiene", help="reject duplicate basenames and legacy names")
+    sub.add_parser("check-boards", help="validate chip/board manifests and Kconfig")
 
     p_keil = sub.add_parser("gen-keil", help="generate the AC5 uVision project")
     p_keil.add_argument("--profile", required=True)
@@ -403,6 +436,9 @@ def main(argv: list[str]) -> int:
 
     if args.command == "check-hygiene":
         return check_hygiene()
+
+    if args.command == "check-boards":
+        return check_boards()
 
     if args.command == "gen-keil":
         return gen_keil(args.profile, args.check)

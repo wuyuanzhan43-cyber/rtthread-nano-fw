@@ -3,9 +3,9 @@
  *
  * 层级：src/app/task
  * 职责：
- *   1. 静态 manager、app_rpc 实例和 RPC 栈；
- *   2. adopt RT-Thread main，创建/启动 RPC 任务；
- *   3. RPC 任务入口：心跳、poll、wait_rx。
+ *   1. 静态 manager、app_rpc 实例、RPC/worker 栈；
+ *   2. adopt RT-Thread main，创建/启动 RPC 和 worker 任务；
+ *   3. RPC 任务入口：心跳、poll、wait_rx；worker 只维护心跳。
  *
  * 上下文：app_tasks_init/start 在 main 线程；入口在 RPC 任务。
  * 依赖：app/tasks.h、app_config.h、fw/rtthread_task.h、
@@ -19,6 +19,7 @@
  */
 #include "app/tasks.h"
 #include "app_config.h"
+#include "fw/clock.h"
 #include "fw/rtthread_task.h"
 #include "fw/rtthread_clock.h"
 #include <stdint.h>
@@ -27,13 +28,22 @@
 #error "APP_RPC_TASK_STACK_SIZE must be a multiple of 8"
 #endif
 
+#if (APP_WORKER_TASK_STACK_SIZE % 8) != 0
+#error "APP_WORKER_TASK_STACK_SIZE must be a multiple of 8"
+#endif
+
 /* RPC 任务的静态栈；uint64_t 数组天然满足 8 字节对齐。 */
 static uint64_t s_rpc_stack[APP_RPC_TASK_STACK_SIZE / 8];
+
+/* 可控 worker 的静态栈；只用于验证任务控制和多任务健康度。 */
+static uint64_t s_worker_stack[APP_WORKER_TASK_STACK_SIZE / 8];
 
 /* 应用静态对象；生命周期覆盖整个程序。 */
 static app_rpc_t s_rpc;
 static fw_task_manager_t s_tasks;
 static fw_task_t *s_rpc_task;
+static fw_task_t *s_worker_task;
+static volatile uint32_t s_worker_loops;
 static bool s_initialized;
 
 /*
@@ -60,11 +70,32 @@ static void app_rpc_task_entry(void *arg)
     }
 }
 
+/*
+ * worker 任务入口。
+ *
+ * 该任务没有业务职责，只做两件事：
+ *   1. 周期更新心跳，让健康度/CPU 统计有第二个真实样本；
+ *   2. 提供一个可被 0x07 命令挂起/恢复的目标，验证协作式任务控制。
+ *
+ * 它使用与业务相同的 fw_delay_ms 抽象，不直接依赖 RT-Thread API。
+ */
+static void app_worker_task_entry(void *arg)
+{
+    (void)arg;
+
+    for (;;) {
+        fw_task_heartbeat_self(&s_tasks);
+        ++s_worker_loops;
+        fw_delay_ms(APP_WORKER_PERIOD_MS);
+    }
+}
+
 fw_status_t app_tasks_init(void)
 {
     fw_task_manager_config_t manager_config;
     fw_task_adopt_config_t main_config;
     fw_task_create_config_t rpc_config;
+    fw_task_create_config_t worker_config;
     fw_status_t status;
 
     if (s_initialized) return FW_OK;
@@ -107,13 +138,44 @@ fw_status_t app_tasks_init(void)
         return FW_EIO;
     }
 
+    /*
+     * 可控 worker：让 0x07 命令有真实目标可操作。
+     * 优先级低于 main/rpc，只在主循环和 RPC 都让出 CPU 时运行。
+     */
+    worker_config.name = "worker";
+    worker_config.entry = app_worker_task_entry;
+    worker_config.arg = NULL;
+    worker_config.stack = s_worker_stack;
+    worker_config.stack_size = sizeof(s_worker_stack);
+    worker_config.priority = APP_WORKER_TASK_PRIORITY;
+    worker_config.time_slice = 10U;
+    worker_config.health.heartbeat_enabled = true;
+    worker_config.health.controllable = true;
+    worker_config.health.heartbeat_warn_ms = APP_TASK_HEARTBEAT_WARN_MS;
+    worker_config.health.heartbeat_lost_ms = APP_TASK_HEARTBEAT_LOST_MS;
+    worker_config.health.stack_warn_free = APP_TASK_STACK_WARN_BYTES;
+
+    s_worker_task = fw_task_create(&s_tasks, &worker_config);
+    if (s_worker_task == NULL) {
+        fw_task_manager_deinit(&s_tasks);
+        s_rpc_task = NULL;
+        return FW_EIO;
+    }
+
     s_initialized = true;
     return FW_OK;
 }
 
 fw_status_t app_tasks_start(void)
 {
-    if (!s_initialized || s_rpc_task == NULL) return FW_ENOTREADY;
+    fw_status_t status;
+
+    if (!s_initialized || s_rpc_task == NULL || s_worker_task == NULL)
+        return FW_ENOTREADY;
+
+    /* worker 优先级低，startup 不会抢占 main；随后再启动 RPC。 */
+    status = fw_task_start(&s_tasks, s_worker_task);
+    if (status != FW_OK) return status;
     return fw_task_start(&s_tasks, s_rpc_task);
 }
 

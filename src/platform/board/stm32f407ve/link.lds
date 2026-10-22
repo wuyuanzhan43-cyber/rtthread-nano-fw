@@ -16,11 +16,12 @@
  */
 ENTRY(Reset_Handler)
 
-/* 区域大小/起始地址来自 Kconfig.board，由 genconfig.py 生成。 */
+/* 区域大小/起始地址/代码区预留来自 board manifest，由 boardgen.py 生成。 */
 INCLUDE board_memory.ld
 
 MEMORY {
-    FLASH (rx)  : ORIGIN = BOARD_FLASH_ORIGIN, LENGTH = BOARD_FLASH_LENGTH
+    /* NVM 启用时 BOARD_CODE_FLASH_LENGTH 会小于总 Flash。 */
+    FLASH (rx)  : ORIGIN = BOARD_FLASH_ORIGIN, LENGTH = BOARD_CODE_FLASH_LENGTH
     RAM   (xrw) : ORIGIN = BOARD_RAM_ORIGIN,   LENGTH = BOARD_RAM_LENGTH
     CCM   (rw)  : ORIGIN = BOARD_CCM_ORIGIN,   LENGTH = BOARD_CCM_LENGTH
 }

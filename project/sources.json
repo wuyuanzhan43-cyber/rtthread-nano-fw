@@ -55,11 +55,13 @@
     "src/tests/host/test_framework.c",
     "src/tests/host/test_task.c",
     "src/tests/host/test_app_rpc.c",
+    "src/tests/host/test_peripherals.c",
     "src/tests/host/host_devices.c",
     "src/tests/host/host_tasks.c"
   ],
   "bsp_sources": [
     "src/platform/stm32f407/drv_common.c",
+    "src/platform/stm32f407/drv_dma.c",
     "src/platform/stm32f407/drv_pin.c",
     "src/platform/stm32f407/drv_serial.c",
     "src/platform/stm32f407/drv_spi.c",

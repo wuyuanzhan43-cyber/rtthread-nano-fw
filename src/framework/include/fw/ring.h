@@ -66,6 +66,13 @@ size_t fw_ring_write(fw_ring_t *ring, const uint8_t *data, size_t length);
 size_t fw_ring_read(fw_ring_t *ring, uint8_t *data, size_t capacity);
 
 /*
+ * 丢弃最多 length 字节（只移动 tail/count，不拷贝数据、不清 storage）。
+ * 返回实际丢弃数量。DMA TX 完成回调只需要“消费已发送块”，
+ * 不需要把数据再读出来，因此用它比 fw_ring_read 更直接。
+ */
+size_t fw_ring_discard(fw_ring_t *ring, size_t length);
+
+/*
  * 查看数据但不消费。
  * 从 tail 开始复制最多 capacity 字节，head/tail/count 保持不变。
  * 典型用途：DMA/IT 发送器在真正发送完成前保持数据稳定。

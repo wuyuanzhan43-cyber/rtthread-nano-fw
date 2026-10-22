@@ -57,21 +57,43 @@ const drv_serial_hw_t *board_serial_hw(size_t *count)
 #if (defined(FW_USING_UART1) && FW_USING_UART1) || \
     (defined(FW_USING_UART2) && FW_USING_UART2) || \
     (defined(FW_USING_UART3) && FW_USING_UART3)
+    /*
+     * 每条描述符 = 引脚 + 波特率/IRQ + 可选 DMA 路由。
+     *
+     * DMA controller/stream/channel 来自 boardgen 对 chip manifest 的分配；
+     * 未启用时这三个字段是 0xFF，对应 enabled=false。驱动据此选择
+     * RXNE/TXE 中断路径或 DMA 路径，不需要板级再写条件编译。
+     */
     static const drv_serial_hw_t serial_hw[] = {
 #if defined(FW_USING_UART1) && FW_USING_UART1
         {1U, BOARD_UART1_TX_PORT, BOARD_UART1_TX_PIN, BOARD_UART1_AF,
          BOARD_UART1_RX_PORT, BOARD_UART1_RX_PIN, BOARD_UART1_AF,
-         BOARD_UART_BAUD, BOARD_UART_IRQ_PRIORITY},
+         BOARD_UART_BAUD, BOARD_UART_IRQ_PRIORITY,
+         {BOARD_UART1_DMA_RX_CONTROLLER, BOARD_UART1_DMA_RX_STREAM,
+          BOARD_UART1_DMA_RX_CHANNEL},
+         {BOARD_UART1_DMA_TX_CONTROLLER, BOARD_UART1_DMA_TX_STREAM,
+          BOARD_UART1_DMA_TX_CHANNEL},
+         (BOARD_UART1_DMA_RX_ENABLED != 0), (BOARD_UART1_DMA_TX_ENABLED != 0)},
 #endif
 #if defined(FW_USING_UART2) && FW_USING_UART2
         {2U, BOARD_UART2_TX_PORT, BOARD_UART2_TX_PIN, BOARD_UART2_AF,
          BOARD_UART2_RX_PORT, BOARD_UART2_RX_PIN, BOARD_UART2_AF,
-         BOARD_UART_BAUD, BOARD_UART_IRQ_PRIORITY},
+         BOARD_UART_BAUD, BOARD_UART_IRQ_PRIORITY,
+         {BOARD_UART2_DMA_RX_CONTROLLER, BOARD_UART2_DMA_RX_STREAM,
+          BOARD_UART2_DMA_RX_CHANNEL},
+         {BOARD_UART2_DMA_TX_CONTROLLER, BOARD_UART2_DMA_TX_STREAM,
+          BOARD_UART2_DMA_TX_CHANNEL},
+         (BOARD_UART2_DMA_RX_ENABLED != 0), (BOARD_UART2_DMA_TX_ENABLED != 0)},
 #endif
 #if defined(FW_USING_UART3) && FW_USING_UART3
         {3U, BOARD_UART3_TX_PORT, BOARD_UART3_TX_PIN, BOARD_UART3_AF,
          BOARD_UART3_RX_PORT, BOARD_UART3_RX_PIN, BOARD_UART3_AF,
-         BOARD_UART_BAUD, BOARD_UART_IRQ_PRIORITY},
+         BOARD_UART_BAUD, BOARD_UART_IRQ_PRIORITY,
+         {BOARD_UART3_DMA_RX_CONTROLLER, BOARD_UART3_DMA_RX_STREAM,
+          BOARD_UART3_DMA_RX_CHANNEL},
+         {BOARD_UART3_DMA_TX_CONTROLLER, BOARD_UART3_DMA_TX_STREAM,
+          BOARD_UART3_DMA_TX_CHANNEL},
+         (BOARD_UART3_DMA_RX_ENABLED != 0), (BOARD_UART3_DMA_TX_ENABLED != 0)},
 #endif
     };
     if (count != NULL) *count = sizeof(serial_hw) / sizeof(serial_hw[0]);

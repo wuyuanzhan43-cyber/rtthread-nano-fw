@@ -450,6 +450,11 @@
               <FilePath>..\src\platform\stm32f407\drv_common.c</FilePath>
             </File>
             <File>
+              <FileName>drv_dma.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\platform\stm32f407\drv_dma.c</FilePath>
+            </File>
+            <File>
               <FileName>drv_pin.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\src\platform\stm32f407\drv_pin.c</FilePath>

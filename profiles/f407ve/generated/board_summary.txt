@@ -1,0 +1,22 @@
+# board summary: stm32f407ve
+chip: stm32f407
+clock variant: hsi16
+sysclk: 16000000 Hz
+hclk: 16000000 Hz
+pclk1: 16000000 Hz
+pclk2: 16000000 Hz
+manifest hash: 66ec98ee3438b14ea02a9e50c41ee46dad93d77ec7ad53b96243cfab40201a52
+
+pins:
+  PA2  LCD_BL
+  PA3  LCD_RES
+  PA4  LCD_CS
+  PA5  SPI1_SCK
+  PA6  LCD_DC
+  PA7  SPI1_MOSI
+  PA9  UART1_TX
+  PA10 UART1_RX
+  PE2  LED
+
+dma:
+  none
