@@ -1,7 +1,0 @@
-{
-  "schema_version": 1,
-  "platform": "stm32f407",
-  "chip": "chips/stm32f407.json",
-  "board": "boards/stm32f407ve/board.json",
-  "clock_variant": "hse_8_168"
-}

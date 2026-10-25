@@ -30,6 +30,7 @@ const char *fw_status_name(fw_status_t status)
     case FW_ENODEV: return "ENODEV";
     case FW_EEXIST: return "EEXIST";
     case FW_EBUSY: return "EBUSY";
+    case FW_ENODATA: return "ENODATA";
     default: return "UNKNOWN";
     }
 }

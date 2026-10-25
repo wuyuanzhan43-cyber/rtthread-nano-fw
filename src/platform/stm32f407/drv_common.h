@@ -43,4 +43,12 @@ void rt_hw_systick_init(void);
 /* 把 HAL_StatusTypeDef（HAL_OK/HAL_BUSY/HAL_TIMEOUT/HAL_ERROR）转成 fw_status_t。 */
 fw_status_t drv_status_from_hal(HAL_StatusTypeDef status);
 
+/*
+ * 把框架超时（毫秒）转成 HAL 超时：
+ *   FW_WAIT_FOREVER -> HAL_MAX_DELAY；
+ *   0               -> 1（HAL 不接受 0）；
+ *   其他            -> 原值。
+ */
+uint32_t drv_timeout_to_hal(uint32_t timeout_ms);
+
 #endif

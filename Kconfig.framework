@@ -20,7 +20,7 @@ config FW_TASK_MAX
     default 8
     range 1 32
 
-# pin/serial/spi 类的编译开关。
+# pin/serial/spi/i2c/adc/pwm 类的编译开关。
 # 当前 v2 固定启用；保留符号是为了让生成头文件与代码中的
 # #if FW_USING_* 判断保持一致，也方便以后做裁剪。
 config FW_USING_PIN
@@ -34,6 +34,31 @@ config FW_USING_SERIAL
 config FW_USING_SPI
     bool
     default y
+
+config FW_USING_I2C
+    bool
+    default y
+
+config FW_USING_ADC
+    bool
+    default y
+
+config FW_USING_PWM
+    bool
+    default y
+
+# 参数存储组件；实际后端由板级 NVM 分区提供。
+config FW_USE_PARAM
+    bool
+    default y
+
+config FW_PARAM_DATA_MAX
+    int "Parameter data max bytes"
+    default 1024
+    range 64 8192
+    help
+        Maximum payload for one parameter record. Each of the two Flash
+        slots must hold the 20-byte header plus this many bytes.
 
 # 每个串口实例的 RX ring 大小。
 # RAM 占用 = 实例数 * (RX + TX)，例如默认 1 个 UART 为 1KB。
@@ -77,10 +102,14 @@ config FW_USE_TASK
 
 # 预留给日志等级；当前没有代码消费，保留是为了旧 .config 仍可加载。
 config FW_LOG_LEVEL
-    int
-    default 0
+    int "Framework log level (0=off, 1=error, 2=warn, 3=info, 4=debug)"
+    default 3
+    range 0 4
     help
-        Reserved. No v2 code reads this value yet; framework logging is
-        intentionally not part of the first cut.
+        Compile-time maximum for fw_log. Lower levels are also compiled out,
+        so 0 removes the log format strings from the image. Runtime can lower
+        the level further via fw_log_set_level().
+        Logging is task-context only; fault/panic use a separate direct
+        console writer.
 
 endmenu

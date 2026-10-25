@@ -18,7 +18,7 @@ menu "STM32F407 drivers"
             bool "Enable UART1 (serial1)"
             default y
             help
-                Build serial1 on USART1. Pins/AF come from the board manifest.
+                Build serial1 on USART1. Pins/AF come from board_config.h.
                 UART1 is on APB2 and is the default console.
 
         config FW_USING_UART1_DMA_RX
@@ -96,8 +96,12 @@ menu "STM32F407 drivers"
             depends on FW_USING_SPI1
             default n
             help
-                Reserved for the SPI DMA milestone. It allocates DMA routes
-                now; the async transfer API lands in M2.
+                Allocate DMA routes and use DMA for transfers >= 16 bytes.
+                TX DMA is always enabled; RX DMA additionally requires
+                BOARD_SPI1_USE_MISO. The class exposes async/wait/abort,
+                and blocking transfers on the DMA path wait for completion.
+                Note: SPI1 MISO (PA6) shares the LCD DC pin on this board,
+                so the default SPI1 configuration is TX-only.
 
         config FW_USING_SPI2
             bool "Enable SPI2 (spi2)"
@@ -110,6 +114,9 @@ menu "STM32F407 drivers"
             bool "SPI2 DMA"
             depends on FW_USING_SPI2
             default n
+            help
+                Allocate DMA routes for SPI2. TX always uses DMA; RX requires
+                BOARD_SPI2_USE_MISO. Full-duplex uses two DMA streams.
 
         config FW_USING_SPI3
             bool "Enable SPI3 (spi3)"
@@ -121,6 +128,50 @@ menu "STM32F407 drivers"
             bool "SPI3 DMA"
             depends on FW_USING_SPI3
             default n
+            help
+                Allocate DMA routes for SPI3. TX always uses DMA; RX requires
+                BOARD_SPI3_USE_MISO. Full-duplex uses two DMA streams.
+    endmenu
+
+    menu "I2C instances"
+        # 首版只实现主模式阻塞事务；GPIO 固定为 AF_OD + 内部上拉。
+        # 400 kHz 需要板级外部 2.2k–4.7k 上拉。
+        config FW_USING_I2C1
+            bool "Enable I2C1 (i2c1)"
+            default n
+            help
+                Build i2c1 on I2C1 with PB6/PB7 (AF4). Blocking master only.
+
+        config FW_USING_I2C2
+            bool "Enable I2C2 (i2c2)"
+            default n
+            help
+                Build i2c2 on I2C2 with PB10/PB11 (AF4). These pins conflict
+                with UART3, so enable only one of them.
+
+        config FW_USING_I2C3
+            bool "Enable I2C3 (i2c3)"
+            default n
+            help
+                Build i2c3 on I2C3 with PA8/PC9 (AF4).
+    endmenu
+
+    menu "ADC instances"
+        config FW_USING_ADC1
+            bool "Enable ADC1 (adc1)"
+            default n
+            help
+                Build adc1 on ADC1 with PB0/PB1 (IN8/IN9). Blocking single
+                conversion; no DMA or IRQ in the first cut.
+    endmenu
+
+    menu "PWM instances"
+        config FW_USING_PWM4
+            bool "Enable TIM4 PWM (pwm4)"
+            default n
+            help
+                Build pwm4 on TIM4 with PD12..PD15 (AF2), four channels.
+                Outputs stay stopped until fw_pwm_start() is called.
     endmenu
 
     menu "Pin interrupts"

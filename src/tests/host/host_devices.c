@@ -285,6 +285,280 @@ static const fw_display_ops_t fake_display_ops = {
     fake_display_backlight
 };
 
+/* SPI 配置：只保存软件副本，硬件无动作。 */
+static int fake_spi_configure(fw_dev_t *dev, const fw_spi_config_t *config)
+{
+    fw_host_t *host = FW_CONTAINER_OF(dev, fw_host_t, spi.dev);
+    if (config == NULL) return FW_EINVAL;
+    host->spi_config = *config;
+    return FW_OK;
+}
+
+/*
+ * 同步传输：把 TX 追加到 spi_tx，RX 填 0x40.. 模式。
+ * 假设备不模拟时钟，收发在同一调用内“立即”完成。
+ */
+static int fake_spi_transfer(fw_dev_t *dev, const uint8_t *tx, uint8_t *rx,
+                             size_t length, uint32_t timeout_ms)
+{
+    fw_host_t *host = FW_CONTAINER_OF(dev, fw_host_t, spi.dev);
+    size_t i;
+    (void)timeout_ms;
+    if (length == 0U || (tx == NULL && rx == NULL)) return FW_EINVAL;
+    if (tx != NULL) {
+        if (host->spi_tx_length + length > sizeof(host->spi_tx))
+            return FW_EOVERFLOW;
+        memcpy(&host->spi_tx[host->spi_tx_length], tx, length);
+        host->spi_tx_length += length;
+    }
+    if (rx != NULL) {
+        for (i = 0U; i < length; ++i) rx[i] = (uint8_t)(0x40U + i);
+    }
+    return (int)length;
+}
+
+/*
+ * 异步启动：只登记 pending，真正搬运在 wait 返回 FW_OK 时完成。
+ * 这样测试可以精确制造 EAGAIN、超时和 abort 窗口。
+ */
+static int fake_spi_transfer_async(fw_dev_t *dev, const uint8_t *tx,
+                                   uint8_t *rx, size_t length)
+{
+    fw_host_t *host = FW_CONTAINER_OF(dev, fw_host_t, spi.dev);
+    if (length == 0U || (tx == NULL && rx == NULL)) return FW_EINVAL;
+    if (host->spi_pending) return FW_EBUSY;
+    host->spi_pending = true;
+    host->spi_pending_length = length;
+    host->spi_pending_tx = tx;
+    host->spi_pending_rx = rx;
+    return (int)length;
+}
+
+/* 等待：EAGAIN/ETIMEOUT 保留 pending，其余结果完成并清 pending。 */
+static int fake_spi_transfer_wait(fw_dev_t *dev, uint32_t timeout_ms)
+{
+    fw_host_t *host = FW_CONTAINER_OF(dev, fw_host_t, spi.dev);
+    size_t i;
+    (void)timeout_ms;
+    if (!host->spi_pending) return FW_EINVAL;
+    if (host->spi_wait_result == FW_EAGAIN ||
+        host->spi_wait_result == FW_ETIMEOUT)
+        return host->spi_wait_result;
+
+    if (host->spi_wait_result == FW_OK) {
+        if (host->spi_pending_tx != NULL) {
+            if (host->spi_tx_length + host->spi_pending_length >
+                sizeof(host->spi_tx))
+                return FW_EOVERFLOW;
+            memcpy(&host->spi_tx[host->spi_tx_length], host->spi_pending_tx,
+                   host->spi_pending_length);
+            host->spi_tx_length += host->spi_pending_length;
+        }
+        if (host->spi_pending_rx != NULL) {
+            for (i = 0U; i < host->spi_pending_length; ++i)
+                host->spi_pending_rx[i] = (uint8_t)(0x40U + i);
+        }
+    }
+
+    host->spi_pending = false;
+    host->spi_pending_tx = NULL;
+    host->spi_pending_rx = NULL;
+    return host->spi_wait_result;
+}
+
+/* 取消：记录调用次数；abort_result 由测试注入，失败时保留 pending。 */
+static int fake_spi_transfer_abort(fw_dev_t *dev)
+{
+    fw_host_t *host = FW_CONTAINER_OF(dev, fw_host_t, spi.dev);
+    ++host->spi_abort_calls;
+    if (host->spi_abort_result != FW_OK) return host->spi_abort_result;
+    host->spi_pending = false;
+    host->spi_pending_tx = NULL;
+    host->spi_pending_rx = NULL;
+    return FW_OK;
+}
+
+static const fw_spi_ops_t fake_spi_ops = {
+    fake_spi_configure,
+    fake_spi_transfer,
+    fake_spi_transfer_async,
+    fake_spi_transfer_wait,
+    fake_spi_transfer_abort
+};
+
+static const fw_drv_t fake_spi_drv = {
+    FW_DEV_TYPE_SPI, &fake_spi_ops, NULL
+};
+
+/* ----------------------------- fake I2C ----------------------------- */
+
+static int fake_i2c_configure(fw_dev_t *dev, const fw_i2c_config_t *config)
+{
+    fw_host_t *host = FW_CONTAINER_OF(dev, fw_host_t, i2c.dev);
+    if (config == NULL) return FW_EINVAL;
+    host->i2c_config = *config;
+    return FW_OK;
+}
+
+/* 原始事务：记录地址和 TX，RX 填 0x80.. 模式。 */
+static int fake_i2c_transfer(fw_dev_t *dev, uint16_t addr7,
+                             const uint8_t *tx, size_t tx_len,
+                             uint8_t *rx, size_t rx_len, uint32_t timeout_ms)
+{
+    fw_host_t *host = FW_CONTAINER_OF(dev, fw_host_t, i2c.dev);
+    size_t i;
+    (void)timeout_ms;
+    ++host->i2c_transfers;
+    host->i2c_last_addr = addr7;
+    if (host->i2c_result != FW_OK) return host->i2c_result;
+    if (tx_len != 0U) {
+        if (host->i2c_tx_length + tx_len > sizeof(host->i2c_tx))
+            return FW_EOVERFLOW;
+        memcpy(&host->i2c_tx[host->i2c_tx_length], tx, tx_len);
+        host->i2c_tx_length += tx_len;
+    }
+    if (rx_len != 0U) {
+        for (i = 0U; i < rx_len; ++i) rx[i] = (uint8_t)(0x80U + i);
+    }
+    return (int)(tx_len + rx_len);
+}
+
+static int fake_i2c_mem_read(fw_dev_t *dev, uint16_t addr7, uint16_t mem_addr,
+                             uint8_t mem_addr_size, uint8_t *rx,
+                             size_t rx_len, uint32_t timeout_ms)
+{
+    fw_host_t *host = FW_CONTAINER_OF(dev, fw_host_t, i2c.dev);
+    size_t i;
+    (void)timeout_ms;
+    ++host->i2c_mem_reads;
+    host->i2c_last_addr = addr7;
+    host->i2c_last_mem_addr = mem_addr;
+    host->i2c_last_mem_size = mem_addr_size;
+    if (host->i2c_result != FW_OK) return host->i2c_result;
+    for (i = 0U; i < rx_len; ++i) rx[i] = (uint8_t)(0x40U + i);
+    return (int)rx_len;
+}
+
+static int fake_i2c_mem_write(fw_dev_t *dev, uint16_t addr7,
+                              uint16_t mem_addr, uint8_t mem_addr_size,
+                              const uint8_t *tx, size_t tx_len,
+                              uint32_t timeout_ms)
+{
+    fw_host_t *host = FW_CONTAINER_OF(dev, fw_host_t, i2c.dev);
+    (void)timeout_ms;
+    ++host->i2c_mem_writes;
+    host->i2c_last_addr = addr7;
+    host->i2c_last_mem_addr = mem_addr;
+    host->i2c_last_mem_size = mem_addr_size;
+    if (host->i2c_result != FW_OK) return host->i2c_result;
+    if (host->i2c_tx_length + tx_len > sizeof(host->i2c_tx))
+        return FW_EOVERFLOW;
+    memcpy(&host->i2c_tx[host->i2c_tx_length], tx, tx_len);
+    host->i2c_tx_length += tx_len;
+    return (int)tx_len;
+}
+
+static int fake_i2c_probe(fw_dev_t *dev, uint16_t addr7, uint32_t timeout_ms)
+{
+    fw_host_t *host = FW_CONTAINER_OF(dev, fw_host_t, i2c.dev);
+    (void)timeout_ms;
+    ++host->i2c_probes;
+    host->i2c_last_addr = addr7;
+    return host->i2c_probe_result;
+}
+
+static const fw_i2c_ops_t fake_i2c_ops = {
+    fake_i2c_configure,
+    fake_i2c_transfer,
+    fake_i2c_mem_read,
+    fake_i2c_mem_write,
+    fake_i2c_probe
+};
+
+static const fw_drv_t fake_i2c_drv = {
+    FW_DEV_TYPE_I2C, &fake_i2c_ops, NULL
+};
+
+/* ----------------------------- fake ADC ----------------------------- */
+
+static int fake_adc_configure(fw_dev_t *dev, const fw_adc_config_t *config)
+{
+    fw_host_t *host = FW_CONTAINER_OF(dev, fw_host_t, adc.dev);
+    if (config == NULL) return FW_EINVAL;
+    host->adc_config = *config;
+    return FW_OK;
+}
+
+static int fake_adc_read(fw_dev_t *dev, int channel, uint16_t *raw,
+                         uint32_t timeout_ms)
+{
+    fw_host_t *host = FW_CONTAINER_OF(dev, fw_host_t, adc.dev);
+    (void)timeout_ms;
+    ++host->adc_reads;
+    if (host->adc_result != FW_OK) return host->adc_result;
+    if (raw == NULL || channel < 0 || channel > 15) return FW_EINVAL;
+    *raw = host->adc_samples[channel];
+    return FW_OK;
+}
+
+static const fw_adc_ops_t fake_adc_ops = {
+    fake_adc_configure,
+    fake_adc_read
+};
+
+static const fw_drv_t fake_adc_drv = {
+    FW_DEV_TYPE_ADC, &fake_adc_ops, NULL
+};
+
+/* ----------------------------- fake PWM ----------------------------- */
+
+static int fake_pwm_configure(fw_dev_t *dev, const fw_pwm_config_t *config)
+{
+    fw_host_t *host = FW_CONTAINER_OF(dev, fw_host_t, pwm.dev);
+    if (config == NULL) return FW_EINVAL;
+    if (host->pwm_started) return FW_EBUSY;
+    if (host->pwm_result != FW_OK) return host->pwm_result;
+    host->pwm_config = *config;
+    return FW_OK;
+}
+
+static int fake_pwm_set_duty(fw_dev_t *dev, int channel, uint32_t permille)
+{
+    fw_host_t *host = FW_CONTAINER_OF(dev, fw_host_t, pwm.dev);
+    ++host->pwm_set_calls;
+    if (host->pwm_result != FW_OK) return host->pwm_result;
+    if (channel < 0 || channel >= FW_PWM_CHANNELS) return FW_EINVAL;
+    host->pwm_duty[channel] = permille;
+    return FW_OK;
+}
+
+static int fake_pwm_start(fw_dev_t *dev)
+{
+    fw_host_t *host = FW_CONTAINER_OF(dev, fw_host_t, pwm.dev);
+    if (host->pwm_result != FW_OK) return host->pwm_result;
+    host->pwm_started = true;
+    return FW_OK;
+}
+
+static int fake_pwm_stop(fw_dev_t *dev)
+{
+    fw_host_t *host = FW_CONTAINER_OF(dev, fw_host_t, pwm.dev);
+    if (host->pwm_result != FW_OK) return host->pwm_result;
+    host->pwm_started = false;
+    return FW_OK;
+}
+
+static const fw_pwm_ops_t fake_pwm_ops = {
+    fake_pwm_configure,
+    fake_pwm_set_duty,
+    fake_pwm_start,
+    fake_pwm_stop
+};
+
+static const fw_drv_t fake_pwm_drv = {
+    FW_DEV_TYPE_PWM, &fake_pwm_ops, NULL
+};
+
 /*
  * 复位测试环境。
  *
@@ -296,6 +570,12 @@ void host_reset(fw_host_t *host)
     memset(host, 0, sizeof(*host));
     host->write_limit = HOST_SERIAL_CAPACITY;
     host->display_writing = false;
+    host->spi_wait_result = FW_OK;
+    host->spi_abort_result = FW_OK;
+    host->i2c_result = FW_OK;
+    host->i2c_probe_result = FW_OK;
+    host->adc_result = FW_OK;
+    host->pwm_result = FW_OK;
     fw_dev_registry_reset();
 }
 
@@ -358,19 +638,27 @@ void host_serial_set_write_limit(fw_host_t *host, size_t limit)
 }
 
 /*
- * 注册三个假设备。
+ * 注册七个假设备。
  *
- * 顺序与真实板级一致：serial、pin、lcd；
+ * 顺序与真实板级一致：serial、pin、spi、i2c、adc、pwm、lcd；
  * 这里不模拟依赖关系，注册顺序只影响设备表下标。
  * 返回值被忽略，因为测试环境已知这些名字不会冲突。
  */
 void host_register_devices(fw_host_t *host)
 {
     fw_display_info_t info = { HOST_DISPLAY_WIDTH, HOST_DISPLAY_HEIGHT, 16U };
+    fw_spi_config_t spi_config = { 12000000U, 0, 1 };
+    fw_i2c_config_t i2c_config = { 100000U };
+    fw_adc_config_t adc_config = { 3300U, 12U, 84U };
+    fw_pwm_config_t pwm_config = { 1000U };
     (void)fw_serial_register(&host->serial, "serial1", &fake_serial_drv,
                              host->rx_storage, sizeof(host->rx_storage),
                              host->wr_storage, host->write_limit, NULL);
     (void)fw_pin_register(&host->pin, "pin", &fake_pin_drv);
+    (void)fw_spi_register(&host->spi, "spi1", &fake_spi_drv, &spi_config);
+    (void)fw_i2c_register(&host->i2c, "i2c1", &fake_i2c_drv, &i2c_config);
+    (void)fw_adc_register(&host->adc, "adc1", &fake_adc_drv, &adc_config);
+    (void)fw_pwm_register(&host->pwm, "pwm4", &fake_pwm_drv, &pwm_config);
     (void)fw_display_register(&host->display, "lcd", &fake_display_ops,
                               host, &info);
 }

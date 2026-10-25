@@ -48,7 +48,7 @@
     },
     {
       "name": "f407-dma-debug",
-      "displayName": "STM32F407VE / UART DMA + EXTI / ARM GCC / Debug",
+      "displayName": "STM32F407VE / UART + SPI DMA + EXTI / ARM GCC / Debug",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/f407-dma-debug",
       "toolchainFile": "${sourceDir}/cmake/toolchains/arm-none-eabi.cmake",

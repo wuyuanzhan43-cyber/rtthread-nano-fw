@@ -32,7 +32,7 @@
 #define DRV_DMA_NONE 0xFFU
 
 /*
- * 把 manifest 里的 channel 编号 0..7 转成 HAL 的 DMA_CHANNEL_x。
+ * 把板级 C 表里的 channel 编号 0..7 转成 HAL 的 DMA_CHANNEL_x。
  *
  * 注意：HAL 的 DMA_InitTypeDef.Channel 不是 0..7，而是 CR 寄存器位域宏
  * （DMA_CHANNEL_0..7）。直接把 4 写进去会选错请求，必须经过本映射。
@@ -46,8 +46,8 @@ uint32_t drv_dma_channel_value(uint8_t channel);
  * stream     - 0..7；
  * channel    - 0..7（F4 的 DMA 请求按 channel 选择）。
  *
- * 这个结构由 boardgen 从 chip manifest 的 DMA 请求表生成，board_pins.c
- * 把它填进外设描述符；驱动不写死 stream/channel。
+ * 路由在 board_config.h 的板级 C 表中手写，board.c 把它填进外设
+ * 描述符；驱动不写死 stream/channel。
  */
 typedef struct {
     uint8_t controller;

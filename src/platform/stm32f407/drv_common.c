@@ -187,3 +187,9 @@ fw_status_t drv_status_from_hal(HAL_StatusTypeDef status)
     default: return FW_EIO;
     }
 }
+
+uint32_t drv_timeout_to_hal(uint32_t timeout_ms)
+{
+    if (timeout_ms == FW_WAIT_FOREVER) return HAL_MAX_DELAY;
+    return timeout_ms == 0U ? 1U : timeout_ms;
+}

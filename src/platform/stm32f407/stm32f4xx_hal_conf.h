@@ -4,22 +4,22 @@
  * 层级：src/platform/stm32f407
  * 职责：
  *   1. 只启用框架实际使用的 HAL 模块，减少 Flash 占用；
- *   2. 根据 Kconfig 的 BOARD_HSE_VALUE 配置外部晶振频率；
+ *   2. 根据 board_config.h 的 BOARD_HSE_VALUE 配置外部晶振频率；
  *   3. 把 HAL 的 assert_param 钩子接到 stm32f407_panic；
  *   4. 关闭 HAL 内部的 RTOS 适配（USE_RTOS=0），由 bsp 自己集成 RT-Thread。
  *
  * 上下文：纯编译期配置。
- * 依赖：board_config.h（由 Kconfig 生成）。
+ * 依赖：board_config.h（手写板级事实源）。
  *
  * 说明：
  *   这个文件替换了 STM32Cube 默认的 stm32f4xx_hal_conf.h。
- *   未启用的模块（ADC、CAN、I2C、RTC 等）不会参与编译，
+ *   未启用的模块（CAN、RTC、USB 等）不会参与编译，
  *   对应源文件也没有加入 project/sources.json。
  */
 #ifndef STM32F4XX_HAL_CONF_H
 #define STM32F4XX_HAL_CONF_H
 
-/* HSE_VALUE 是 HAL 的编译期输入，继续消费板级生成配置。 */
+/* HSE_VALUE 是 HAL 的编译期输入，继续消费手写板级配置。 */
 #include "board_config.h"
 #include "stm32f407_panic.h"
 
@@ -28,11 +28,11 @@
  *
  * HAL_MODULE_ENABLED 是总开关；
  * GPIO/RCC/CORTEX 是基础设施；
- * UART/SPI 是框架设备；
+ * UART/SPI/I2C/ADC/TIM 是框架设备；
  * DMA 虽然当前 UART 不用，但 HAL 的 SPI/UART 头文件可能引用其类型；
  * FLASH/PWR 用于时钟/电压配置。
  *
- * 新增外设类时，在这里打开对应模块，并把源文件加入 manifest。
+ * 新增外设类时，在这里打开对应模块，并把源文件加入 project/sources.json。
  */
 #define HAL_MODULE_ENABLED
 #define HAL_GPIO_MODULE_ENABLED
@@ -40,6 +40,10 @@
 #define HAL_CORTEX_MODULE_ENABLED
 #define HAL_UART_MODULE_ENABLED
 #define HAL_SPI_MODULE_ENABLED
+#define HAL_I2C_MODULE_ENABLED
+#define HAL_ADC_MODULE_ENABLED
+#define HAL_TIM_MODULE_ENABLED
+#define HAL_IWDG_MODULE_ENABLED
 #define HAL_DMA_MODULE_ENABLED
 #define HAL_FLASH_MODULE_ENABLED
 #define HAL_PWR_MODULE_ENABLED
@@ -47,12 +51,12 @@
 /*
  * 外部晶振频率。
  *
- * BOARD_HSE_VALUE 由 Kconfig 生成：
- *   - 选择 HSE 8MHz 时为 8000000；
- *   - 选择 HSI 时为 0。
+ * BOARD_HSE_VALUE 在 board_config.h 中定义为 8000000：
+ *   - 选择 HSE 8MHz 时用于 PLL；
+ *   - 选择 HSI 时该晶振不参与时钟树。
  *
- * 即使使用 HSI，HAL 头文件仍要求定义 HSE_VALUE，
- * 这里给 8MHz 作为“板子可能焊了 8MHz 晶振”的默认值。
+ * 即使使用 HSI，HAL 头文件仍要求定义 HSE_VALUE，这里给 8MHz 作为
+ * “板子焊了 8MHz 晶振”的默认值。
  */
 #ifndef BOARD_HSE_VALUE
 #define BOARD_HSE_VALUE 0
@@ -104,6 +108,10 @@
 #include "stm32f4xx_hal_dma.h"
 #include "stm32f4xx_hal_uart.h"
 #include "stm32f4xx_hal_spi.h"
+#include "stm32f4xx_hal_i2c.h"
+#include "stm32f4xx_hal_adc.h"
+#include "stm32f4xx_hal_tim.h"
+#include "stm32f4xx_hal_iwdg.h"
 #include "stm32f4xx_hal_flash.h"
 #include "stm32f4xx_hal_pwr.h"
 

@@ -1,17 +1,23 @@
 # ---------------------------------------------------------------------------
 # STM32F407VE 板级构建选项
 #
-# 板级拓扑（身份、内存、时钟、引脚/AF、设备绑定、LCD 面板参数）只存在于：
-#   boards/stm32f407ve/board.json
-#   chips/stm32f407.json
-#   profiles/<profile>/profile.json（选择 board/chip/clock variant）
-#
-# 本文件只保留构建策略：启用项、波特率、IRQ 优先级、SPI 频率、最小栈。
-# 修改 manifest 后运行：
-#   python tools/fwconfig.py sync --all
+# 板级接线（身份、内存、引脚/AF、通道、LCD、NVM）在 board_config.h 手写 C 表。
+# 本文件只保留构建/运行策略，生成到 board_policy.h：
+#   时钟源、启用项、波特率、IRQ 优先级、SPI/I2C/ADC/PWM 参数、IWDG、fault。
 # ---------------------------------------------------------------------------
 menu "Board build options: STM32F407VE"
     depends on FW_PLATFORM_STM32F407VE
+
+choice
+    prompt "Board clock source"
+    default BOARD_CLOCK_HSI_16
+
+config BOARD_CLOCK_HSI_16
+    bool "HSI 16 MHz (no external crystal)"
+
+config BOARD_CLOCK_HSE_8_168
+    bool "HSE 8 MHz -> 168 MHz"
+endchoice
 
 config BOARD_LED_ENABLE
     bool "Enable LED"
@@ -42,7 +48,7 @@ config BOARD_EXTI_IRQ_PRIORITY
     default 8
     range 0 15
 
-# SPI 引脚/AF 来自 manifest；这里只保留是否使用 MISO 和频率上限。
+# SPI 引脚/AF 在 board_config.h；这里只保留 MISO 与频率上限。
 config BOARD_SPI1_USE_MISO
     bool "SPI1 use MISO"
     default n
@@ -70,9 +76,77 @@ config BOARD_SPI3_MAX_HZ
     default 12000000
     range 1000000 42000000
 
-config BOARD_MIN_STACK_SIZE
-    int "Minimum main/ISR stack (bytes)"
-    default 4096
-    range 1024 65536
+# I2C 引脚/AF 在 board_config.h；速度属于板级电气策略。
+config BOARD_I2C1_SPEED_HZ
+    int "I2C1 speed (Hz)"
+    depends on FW_USING_I2C1
+    default 100000
+    range 10000 400000
+
+config BOARD_I2C2_SPEED_HZ
+    int "I2C2 speed (Hz)"
+    depends on FW_USING_I2C2
+    default 100000
+    range 10000 400000
+
+config BOARD_I2C3_SPEED_HZ
+    int "I2C3 speed (Hz)"
+    depends on FW_USING_I2C3
+    default 100000
+    range 10000 400000
+
+# ADC 电气参数；通道/引脚在 board_config.h。
+config BOARD_ADC1_VREF_MV
+    int "ADC1 reference voltage (mV)"
+    depends on FW_USING_ADC1
+    default 3300
+    range 1000 5000
+
+config BOARD_ADC1_RESOLUTION_BITS
+    int "ADC1 resolution bits"
+    depends on FW_USING_ADC1
+    default 12
+    range 8 12
+    help
+        STM32F407 HAL supports 8/10/12 bits.
+
+config BOARD_ADC1_SAMPLE_CYCLES
+    int "ADC1 sample time (ADC clock cycles)"
+    depends on FW_USING_ADC1
+    default 84
+    range 3 480
+    help
+        Must be one of 3/15/28/56/84/112/144/480.
+
+config BOARD_PWM4_PERIOD_HZ
+    int "PWM4 frequency (Hz)"
+    depends on FW_USING_PWM4
+    default 1000
+    range 1 1000000
+
+config BOARD_IWDG_ENABLE
+    bool "Enable independent watchdog (IWDG)"
+    default n
+    help
+        Start IWDG after all devices/tasks are ready. main only feeds it
+        while no managed task is LOST. Once started it cannot be stopped.
+
+config BOARD_IWDG_TIMEOUT_MS
+    int "IWDG timeout (ms)"
+    depends on BOARD_IWDG_ENABLE
+    default 5000
+    range 100 30000
+    help
+        Estimated with LSI=32kHz; actual timeout varies with the LSI.
+        Keep it above APP_TASK_HEARTBEAT_LOST_MS plus one refresh period.
+
+config BOARD_FAULT_RESET
+    bool "Reset on panic/fault"
+    default n
+    help
+        When enabled, HardFault and panic dump the fault frame and then
+        call NVIC_SystemReset. With IWDG enabled, leaving it disabled also
+        results in a watchdog reset after the timeout; keep it disabled
+        when a debugger needs to inspect the halted state.
 
 endmenu

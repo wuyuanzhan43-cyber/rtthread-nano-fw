@@ -739,7 +739,8 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 /*
  * 按板级描述符注册串口。
  *
- * 描述符表由 board_pins.c 提供；驱动只负责实例对象和 HAL 初始化。
+ * 描述符表由 board.c 从 board_config.h 转换而来；驱动只负责实例对象和
+ * HAL 初始化。
  */
 fw_status_t drv_serial_register_all(const drv_serial_hw_t *hw, size_t count)
 {
@@ -749,8 +750,11 @@ fw_status_t drv_serial_register_all(const drv_serial_hw_t *hw, size_t count)
     if (count == 0U) return FW_OK;
     if (hw == NULL) return FW_EINVAL;
 
-    /* DMA owner 表在第一次注册前清零；所有实例共享同一组 stream。 */
-    drv_dma_init();
+    /*
+     * DMA owner 表由 board_devices_init 在任何驱动注册前统一清零。
+     * 这里不能调用 drv_dma_init：SPI 可能已经 claim 了 stream，
+     * 重复清零会覆盖 owner 表。
+     */
     for (i = 0U; i < count; ++i) {
         drv_serial_t *slot = serial_slot(hw[i].instance);
         const char *name = serial_name(hw[i].instance);

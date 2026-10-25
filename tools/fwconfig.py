@@ -30,7 +30,6 @@ import shutil
 import subprocess
 import sys
 
-import boardgen
 import genconfig as genconfig_mod
 
 # 项目根目录 = tools/ 的上一级；后续所有路径都从这里派生。
@@ -83,8 +82,11 @@ def sync(name: str) -> int:
     """从 .config 生成 profile 的头文件和 CMake 片段。
 
     genconfig.py 负责解析 Kconfig、校验配置并写出：
-        rtconfig.h / board_config.h / fw_config.h / fw_config.cmake
+        rtconfig.h / board_policy.h / fw_config.h / fw_config.cmake
         config_summary.txt
+
+    板级接线（引脚/通道/内存/LCD/NVM）在 hand-written board_config.h，
+    不由生成器输出。
     """
     ensure_config(name)
     _, defconfig, config, generated = profile_dirs(name)
@@ -161,7 +163,32 @@ def check_layout() -> int:
         # 通用启动/console/IRQ 已下沉到 platform/stm32f407。
         ROOT / "src" / "platform" / "board" / "stm32f407ve" / "board_console.c",
         ROOT / "src" / "platform" / "board" / "stm32f407ve" / "board_irq.c",
+        # manifest/boardgen 时代已删除；板级接线只在 board_config.h。
+        ROOT / "boards",
+        ROOT / "chips",
+        ROOT / "tools" / "boardgen.py",
+        ROOT / "tools" / "tests" / "test_boardgen.py",
+        # 拆分过细的旧板级模块。
+        ROOT / "src" / "platform" / "board" / "stm32f407ve" / "board_devices.c",
+        ROOT / "src" / "platform" / "board" / "stm32f407ve" / "board_peripherals.c",
+        ROOT / "src" / "platform" / "board" / "stm32f407ve" / "board_display.c",
+        ROOT / "src" / "platform" / "board" / "stm32f407ve" / "board_storage.c",
+        ROOT / "src" / "platform" / "board" / "stm32f407ve" / "board_pins.c",
+        ROOT / "src" / "platform" / "board" / "stm32f407ve" / "board_pins.h",
+        ROOT / "src" / "platform" / "board" / "stm32f407ve" / "board_clock.c",
+        ROOT / "src" / "platform" / "board" / "stm32f407ve" / "board_clock.h",
+        ROOT / "src" / "platform" / "board" / "stm32f407ve" / "board_init.h",
     ]
+
+    # profile 只保留 defconfig/.config/generated 策略；旧 manifest 选择已删除。
+    for profile in PROFILES.iterdir():
+        if not profile.is_dir():
+            continue
+        forbidden.append(profile / "profile.json")
+        for name in ("board_config.h", "board_desc.h", "board_memory.ld",
+                     "board_keil.json", "board_summary.txt", "board_pinout.md",
+                     "board_channels.md"):
+            forbidden.append(profile / "generated" / name)
     for path in forbidden:
         if path.exists():
             errors.append(f"legacy path still exists: {path.relative_to(ROOT)}")
@@ -180,35 +207,6 @@ def check_layout() -> int:
             print(f"layout: {error}", file=sys.stderr)
         return 1
     print("layout: OK (profiles only)")
-    return 0
-
-
-def check_boards() -> int:
-    """校验所有 profile 引用的 chip/board manifest 与 Kconfig 组合。"""
-    errors: list[str] = []
-    for name in all_profiles():
-        base, _, config, _ = profile_dirs(name)
-        profile_file = base / "profile.json"
-        if not profile_file.is_file():
-            errors.append(f"{name}: missing {profile_file.relative_to(ROOT)}")
-            continue
-        loaded = boardgen.load_profile(base)
-        if loaded.get("platform") == "host":
-            continue
-        if not config.is_file():
-            errors.append(f"{name}: missing {config.relative_to(ROOT)}")
-            continue
-        kconf = genconfig_mod.load_kconfig(KCONFIG)
-        kconf.load_config(str(config))
-        symbols = genconfig_mod.collect_symbols(kconf)
-        for error in boardgen.analyze(loaded, symbols)["errors"]:
-            errors.append(f"{name}: {error}")
-
-    if errors:
-        for error in errors:
-            print(f"boards: {error}", file=sys.stderr)
-        return 1
-    print("boards: OK (manifests + Kconfig)")
     return 0
 
 
@@ -399,7 +397,6 @@ def main(argv: list[str]) -> int:
     sub.add_parser("check-layout", help="reject legacy config and source paths")
     sub.add_parser("check-manifest", help="verify sources.json paths and coverage")
     sub.add_parser("check-hygiene", help="reject duplicate basenames and legacy names")
-    sub.add_parser("check-boards", help="validate chip/board manifests and Kconfig")
 
     p_keil = sub.add_parser("gen-keil", help="generate the AC5 uVision project")
     p_keil.add_argument("--profile", required=True)
@@ -436,9 +433,6 @@ def main(argv: list[str]) -> int:
 
     if args.command == "check-hygiene":
         return check_hygiene()
-
-    if args.command == "check-boards":
-        return check_boards()
 
     if args.command == "gen-keil":
         return gen_keil(args.profile, args.check)

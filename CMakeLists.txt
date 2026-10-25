@@ -55,11 +55,9 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${FW_PROFILE_DEFCONFIG}"
     "${FW_ROOT}/tools/fwconfig.py"
     "${FW_ROOT}/tools/genconfig.py"
-    "${FW_ROOT}/tools/boardgen.py"
     "${FW_ROOT}/project/sources.json"
-    "${FW_ROOT}/chips"
-    "${FW_ROOT}/boards"
-    "${FW_ROOT}/profiles/${FW_PROFILE}/profile.json"
+    "${FW_ROOT}/src/platform/board/stm32f407ve/board_config.h"
+    "${FW_ROOT}/src/platform/board/stm32f407ve/link.lds"
     "${FW_ROOT}/Kconfig"
     "${FW_ROOT}/Kconfig.kernel"
     "${FW_ROOT}/Kconfig.framework"
@@ -184,11 +182,7 @@ if(CONFIG_FW_PLATFORM_HOST)
         add_test(NAME v2_hygiene_check
                  COMMAND "${Python3_EXECUTABLE}" "${FW_ROOT}/tools/fwconfig.py"
                          check-hygiene)
-        # chip/board manifest 与 Kconfig 的组合校验。
-        add_test(NAME v2_board_check
-                 COMMAND "${Python3_EXECUTABLE}" "${FW_ROOT}/tools/fwconfig.py"
-                         check-boards)
-        # 生成器/板级数据单元测试。
+        # 生成器/静态板级数据单元测试（board_config.h + link.lds 一致性）。
         add_test(NAME v2_tools_tests
                  COMMAND "${Python3_EXECUTABLE}" -m unittest discover
                          -s "${FW_ROOT}/tools/tests" -p "test_*.py")

@@ -5,9 +5,10 @@
  * 职责：
  *   1. 验证 ring peek/discard 的“不消费/只消费”语义；
  *   2. 验证 serial 类给 DMA 驱动使用的 rx_push/tx_peek/tx_consume；
- *   3. 验证 pin 类 attach/detach/enable 与 ISR 回调分派。
+ *   3. 验证 pin 类 attach/detach/enable 与 ISR 回调分派；
+ *   4. 验证 SPI 类 async/wait/abort 的 busy 状态机。
  *
- * 这些测试不模拟 STM32 DMA/EXTI 寄存器，只覆盖可以脱离硬件验证的
+ * 这些测试不模拟 STM32 DMA/EXTI/SPI 寄存器，只覆盖可以脱离硬件验证的
  * “策略与所有权”部分；真实时序仍由 HIL/上板验证。
  */
 #include "test_common.h"
@@ -16,11 +17,51 @@
 #include "fw/pin.h"
 #include "fw/ring.h"
 #include "fw/serial.h"
+#include "fw/spi.h"
 
 /* pin IRQ 回调的静态记录；回调在测试里仍按 ISR 上下文约束编写。 */
 static unsigned s_irq_count;
 static int s_irq_number;
 static int s_irq_mode;
+
+/* 只实现一半 async 扩展的驱动；注册必须被拒绝。 */
+static int s_partial_configure(fw_dev_t *dev, const fw_spi_config_t *config)
+{
+    (void)dev;
+    (void)config;
+    return FW_OK;
+}
+
+static int s_partial_transfer(fw_dev_t *dev, const uint8_t *tx, uint8_t *rx,
+                              size_t length, uint32_t timeout_ms)
+{
+    (void)dev;
+    (void)tx;
+    (void)rx;
+    (void)timeout_ms;
+    return (int)length;
+}
+
+static int s_partial_async(fw_dev_t *dev, const uint8_t *tx, uint8_t *rx,
+                           size_t length)
+{
+    (void)dev;
+    (void)tx;
+    (void)rx;
+    return (int)length;
+}
+
+static const fw_spi_ops_t s_partial_ops = {
+    s_partial_configure,
+    s_partial_transfer,
+    s_partial_async,
+    NULL,
+    NULL
+};
+
+static const fw_drv_t s_partial_drv = {
+    FW_DEV_TYPE_SPI, &s_partial_ops, NULL
+};
 
 static void test_pin_irq_cb(fw_dev_t *dev, int number, int mode, void *user)
 {
@@ -154,9 +195,116 @@ static void test_pin_irq(void)
                             test_pin_irq_cb, NULL) == FW_ENOTSUP);
 }
 
+/*
+ * SPI 类 async/wait/abort 状态机。
+ *
+ * fake SPI 在 wait 成功时搬运数据，因此可以精确制造：
+ *   - 启动后 busy，阻止第二次 async/同步 transfer/重配；
+ *   - timeout==0 未完成返回 EAGAIN 且 busy 保持；
+ *   - 正常完成/错误结果清 busy；
+ *   - wait 超时由类层 abort，abort 失败时 busy 保持。
+ */
+static void test_spi_async(void)
+{
+    fw_host_t host;
+    fw_spi_t *spi;
+    uint8_t tx[4] = {1U, 2U, 3U, 4U};
+    uint8_t rx[4] = {0};
+    fw_spi_config_t config = { 6000000U, 1, 0 };
+
+    host_init(&host);
+    host_register_devices(&host);
+    spi = fw_spi_find("spi1");
+    CHECK(spi != NULL);
+    if (spi == NULL) return;
+
+    /* 非 busy 时重配成功，并记录软件副本。 */
+    CHECK(fw_dev_ioctl(&spi->dev, 0, FW_CTL_SPI_SET_CONFIG, &config) ==
+          (int)sizeof(config));
+    CHECK(host.spi_config.mode == 1 && host.spi_config.bit_order == 0);
+
+    /* 同步传输仍然可用。 */
+    CHECK(fw_spi_transfer(&spi->dev, tx, rx, sizeof(tx), 10U) ==
+          (int)sizeof(tx));
+    CHECK(host.spi_tx_length == 4U);
+    CHECK(memcmp(host.spi_tx, tx, 4U) == 0);
+    CHECK(rx[0] == 0x40U && rx[3] == 0x43U);
+
+    /* 异步启动：返回长度、busy 置位，并阻止重入。 */
+    host.spi_tx_length = 0U;
+    CHECK(fw_spi_transfer_async(&spi->dev, tx, NULL, sizeof(tx)) == 4);
+    CHECK(spi->busy);
+    CHECK(fw_spi_transfer_async(&spi->dev, tx, NULL, sizeof(tx)) == FW_EBUSY);
+    CHECK(fw_spi_transfer(&spi->dev, tx, NULL, sizeof(tx), 10U) == FW_EBUSY);
+    CHECK(fw_dev_ioctl(&spi->dev, 0, FW_CTL_SPI_SET_CONFIG, &config) ==
+          FW_EBUSY);
+
+    /* timeout==0 轮询：未完成 -> EAGAIN，busy 必须保持。 */
+    host.spi_wait_result = FW_EAGAIN;
+    CHECK(fw_spi_transfer_wait(&spi->dev, 0U) == FW_EAGAIN);
+    CHECK(spi->busy);
+
+    /* 完成：数据在 wait 成功时才进入 spi_tx。 */
+    host.spi_wait_result = FW_OK;
+    CHECK(fw_spi_transfer_wait(&spi->dev, 10U) == FW_OK);
+    CHECK(!spi->busy);
+    CHECK(host.spi_tx_length == 4U && memcmp(host.spi_tx, tx, 4U) == 0);
+
+    /* 硬件错误：wait 返回 EIO 并清 busy。 */
+    CHECK(fw_spi_transfer_async(&spi->dev, tx, NULL, 4U) == 4);
+    host.spi_wait_result = FW_EIO;
+    CHECK(fw_spi_transfer_wait(&spi->dev, 10U) == FW_EIO);
+    CHECK(!spi->busy);
+
+    /* 等待超时：类层调用 abort，成功则清 busy。 */
+    host.spi_wait_result = FW_OK;
+    CHECK(fw_spi_transfer_async(&spi->dev, tx, rx, 4U) == 4);
+    host.spi_wait_result = FW_ETIMEOUT;
+    CHECK(fw_spi_transfer_wait(&spi->dev, 10U) == FW_ETIMEOUT);
+    CHECK(host.spi_abort_calls == 1U);
+    CHECK(!spi->busy);
+
+    /* abort 失败：返回 EIO 且 busy 保持，允许显式重试。 */
+    host.spi_wait_result = FW_OK;
+    CHECK(fw_spi_transfer_async(&spi->dev, tx, NULL, 4U) == 4);
+    host.spi_wait_result = FW_ETIMEOUT;
+    host.spi_abort_result = FW_EIO;
+    CHECK(fw_spi_transfer_wait(&spi->dev, 10U) == FW_EIO);
+    CHECK(spi->busy);
+    host.spi_abort_result = FW_OK;
+    CHECK(fw_spi_transfer_abort(&spi->dev) == FW_OK);
+    CHECK(!spi->busy);
+    CHECK(fw_spi_transfer_abort(&spi->dev) == FW_OK); /* 幂等 */
+
+    /* 驱动报告 EBUSY（清理未完成）：类层返回 EIO 但保留 busy。 */
+    host.spi_wait_result = FW_OK;
+    CHECK(fw_spi_transfer_async(&spi->dev, tx, NULL, 4U) == 4);
+    host.spi_wait_result = FW_EBUSY;
+    CHECK(fw_spi_transfer_wait(&spi->dev, 10U) == FW_EIO);
+    CHECK(spi->busy);
+    CHECK(fw_spi_transfer_abort(&spi->dev) == FW_OK);
+    CHECK(!spi->busy);
+
+    /* 注册不变量：async/wait/abort 必须全有或全无。 */
+    {
+        fw_spi_t partial;
+        fw_spi_config_t partial_config = { 1000000U, 0, 1 };
+        CHECK(fw_spi_register(&partial, "spi_partial", &s_partial_drv,
+                              &partial_config) == FW_EINVAL);
+        CHECK(fw_dev_find("spi_partial") == NULL);
+    }
+
+    /* 参数检查。 */
+    CHECK(fw_spi_transfer_async(&spi->dev, NULL, NULL, 4U) == FW_EINVAL);
+    CHECK(fw_spi_transfer_async(&spi->dev, tx, NULL,
+                                FW_SPI_MAX_TRANSFER + 1U) == FW_EINVAL);
+    CHECK(fw_spi_transfer_wait(&spi->dev, 1U) == FW_EINVAL);
+}
+
 void test_peripherals_run(void)
 {
     test_ring_peek_discard();
     test_serial_dma_helpers();
     test_pin_irq();
+    test_spi_async();
 }

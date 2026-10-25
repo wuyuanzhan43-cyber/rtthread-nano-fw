@@ -62,7 +62,7 @@ typedef struct {
     uint32_t baud;
     uint8_t irq_priority;
     /*
-     * DMA 路由由 boardgen 从 chip manifest 生成，板级只负责选择是否启用。
+     * DMA 路由在 board_config.h 手写，Kconfig 只负责选择是否启用。
      * controller/stream/channel 为 0xFF 表示未分配；enabled 为 false 时
      * 驱动完全走原来的 RXNE/TXE 中断路径。
      */

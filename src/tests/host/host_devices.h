@@ -3,12 +3,12 @@
  *
  * 层级：src/tests/host
  * 职责：
- *   1. 在没有 RTOS/HAL 的 PC 上实现 fw serial/pin/display 驱动 ops；
- *   2. 记录应用产生的输出（发送字节、引脚电平、像素），供断言使用；
+ *   1. 在没有 RTOS/HAL 的 PC 上实现 fw serial/pin/display/spi/i2c/adc/pwm ops；
+ *   2. 记录应用产生的输出（发送字节、引脚电平、像素、总线/采样/占空比）；
  *   3. 提供可手动推进的毫秒时钟，避免真实延时。
  *
  * 上下文：单线程测试，不需要锁。
- * 依赖：fw/clock.h、fw/dev.h、fw/display.h、fw/pin.h、fw/serial.h。
+ * 依赖：fw/{clock,dev,display,pin,serial,spi,i2c,adc,pwm}.h。
  *
  * 设计说明：
  *   假设备也走完整的 mr 风格设备核心（注册、open、read/write/ioctl），
@@ -27,14 +27,24 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "fw/adc.h"
 #include "fw/clock.h"
 #include "fw/dev.h"
 #include "fw/display.h"
+#include "fw/i2c.h"
 #include "fw/pin.h"
+#include "fw/pwm.h"
 #include "fw/serial.h"
+#include "fw/spi.h"
 
 /* 假串口 ring 和发送记录的容量；足够容纳测试中的所有帧。 */
 #define HOST_SERIAL_CAPACITY 1024U
+
+/* 假 SPI 发送记录的容量。 */
+#define HOST_SPI_CAPACITY 1024U
+
+/* 假 I2C 收发记录的容量。 */
+#define HOST_I2C_CAPACITY 256U
 
 /* 假 LCD 的分辨率，与 ST7735S 默认配置一致。 */
 #define HOST_DISPLAY_WIDTH 128U
@@ -71,10 +81,17 @@
  *   display_begins/ends - 事务次数；
  *   backlight/backlight_changes - 背光状态与变化次数。
  *
+ * SPI：
+ *   spi_tx[]/spi_tx_length - 实际“发送”出去的字节；
+ *   spi_config             - 最近一次 configure 的软件副本；
+ *   spi_pending            - 是否有异步传输在途；
+ *   spi_wait_result/abort_result - 由测试注入的 wait/abort 返回值；
+ *   spi_abort_calls        - transfer_abort 调用次数。
+ *
  * 设备对象：
- *   serial/pin/display - 注册到设备表的静态对象，必须放在最后，
- *                        因为 fake ops 会用 FW_CONTAINER_OF 从 dev
- *                        反推 fw_host_t（dev 必须是第一个成员）。
+ *   serial/pin/display/spi - 注册到设备表的静态对象，必须放在最后，
+ *                            因为 fake ops 会用 FW_CONTAINER_OF 从 dev
+ *                            反推 fw_host_t（dev 必须是第一个成员）。
  */
 typedef struct {
     uint32_t now_ms;
@@ -107,9 +124,48 @@ typedef struct {
     bool backlight;
     unsigned backlight_changes;
 
+    uint8_t spi_tx[HOST_SPI_CAPACITY];
+    size_t spi_tx_length;
+    fw_spi_config_t spi_config;
+    bool spi_pending;
+    size_t spi_pending_length;
+    const uint8_t *spi_pending_tx;
+    uint8_t *spi_pending_rx;
+    fw_status_t spi_wait_result;
+    fw_status_t spi_abort_result;
+    unsigned spi_abort_calls;
+
+    uint8_t i2c_tx[HOST_I2C_CAPACITY];
+    size_t i2c_tx_length;
+    uint16_t i2c_last_addr;
+    uint16_t i2c_last_mem_addr;
+    uint8_t i2c_last_mem_size;
+    fw_i2c_config_t i2c_config;
+    unsigned i2c_transfers;
+    unsigned i2c_mem_reads;
+    unsigned i2c_mem_writes;
+    unsigned i2c_probes;
+    fw_status_t i2c_result;
+    fw_status_t i2c_probe_result;
+
+    uint16_t adc_samples[16];
+    fw_adc_config_t adc_config;
+    unsigned adc_reads;
+    fw_status_t adc_result;
+
+    fw_pwm_config_t pwm_config;
+    uint32_t pwm_duty[FW_PWM_CHANNELS];
+    bool pwm_started;
+    unsigned pwm_set_calls;
+    fw_status_t pwm_result;
+
     fw_serial_t serial;
     fw_pin_t pin;
     fw_display_t display;
+    fw_spi_t spi;
+    fw_i2c_t i2c;
+    fw_adc_t adc;
+    fw_pwm_t pwm;
 } fw_host_t;
 
 /*
@@ -122,7 +178,7 @@ typedef struct {
 void host_init(fw_host_t *host);
 
 /*
- * 注册 serial1、pin、lcd 三个假设备。
+ * 注册 serial1、pin、lcd、spi1、i2c1、adc1、pwm4 七个假设备。
  * 必须在 host_init 之后调用；重复注册同名设备会失败。
  */
 void host_register_devices(fw_host_t *host);

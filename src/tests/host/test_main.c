@@ -20,6 +20,9 @@ void test_framework_run(void);
 void test_task_run(void);
 void test_app_rpc_run(void);
 void test_peripherals_run(void);
+void test_ext_peripherals_run(void);
+void test_param_run(void);
+void test_board_config_run(void);
 
 int main(void)
 {
@@ -27,6 +30,9 @@ int main(void)
     test_task_run();
     test_app_rpc_run();
     test_peripherals_run();
+    test_ext_peripherals_run();
+    test_param_run();
+    test_board_config_run();
 
     if (test_failures != 0) {
         printf("%d test(s) failed\n", test_failures);

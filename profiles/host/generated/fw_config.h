@@ -6,7 +6,8 @@
 #define FW_GENERATED_FW_CONFIG_H
 
 #define FW_DEV_MAX 32
-#define FW_LOG_LEVEL 0
+#define FW_LOG_LEVEL 3
+#define FW_PARAM_DATA_MAX 1024
 #define FW_PLATFORM_HOST 1
 #define FW_PLATFORM_STM32F407VE 0
 #define FW_PROJECT_VERSION "0.2.0"
@@ -14,10 +15,19 @@
 #define FW_SERIAL_TX_BUFSZ 512
 #define FW_TASK_MAX 8
 #define FW_USE_DISPLAY 1
+#define FW_USE_PARAM 1
 #define FW_USE_PROTOCOL 1
 #define FW_USE_TASK 1
+#define FW_USING_ADC 1
+#define FW_USING_ADC1 0
+#define FW_USING_I2C 1
+#define FW_USING_I2C1 0
+#define FW_USING_I2C2 0
+#define FW_USING_I2C3 0
 #define FW_USING_PIN 1
 #define FW_USING_PIN_EXTI 0
+#define FW_USING_PWM 1
+#define FW_USING_PWM4 0
 #define FW_USING_SERIAL 1
 #define FW_USING_SPI 1
 #define FW_USING_SPI1 0

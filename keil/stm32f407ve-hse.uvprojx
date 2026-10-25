@@ -18,10 +18,10 @@
           <Vendor>STMicroelectronics</Vendor>
           <PackID>Keil.STM32F4xx_DFP.3.1.1</PackID>
           <PackURL>https://www.keil.com/pack/</PackURL>
-          <Cpu>IRAM(0x20000000,0x00020000) IROM(0x08000000,0x00080000) CPUTYPE("Cortex-M4") FPU2 CLOCK(168000000) ELITTLE</Cpu>
+          <Cpu>IRAM(0x20000000,0x00020000) IROM(0x08000000,0x00040000) CPUTYPE("Cortex-M4") FPU2 CLOCK(168000000) ELITTLE</Cpu>
           <FlashUtilSpec></FlashUtilSpec>
           <StartupFile></StartupFile>
-          <FlashDriverDll>UL2CM3(-S0 -C0 -P0 -FD20000000 -FC1000 -FN1 -FF0STM32F4xx_512 -FS08000000 -FL080000 -FP0($$Device:STM32F407VETx$Flash\STM32F4xx_512.FLM))</FlashDriverDll>
+          <FlashDriverDll>UL2CM3(-S0 -C0 -P0 -FD20000000 -FC1000 -FN1 -FF0STM32F4xx_512 -FS08000000 -FL040000 -FP0($$Device:STM32F407VETx$Flash\STM32F4xx_512.FLM))</FlashDriverDll>
           <DeviceId>0</DeviceId>
           <RegisterFile>$$Device:STM32F407VETx$Drivers\CMSIS\Device\ST\STM32F4xx\Include\stm32f4xx.h</RegisterFile>
           <MemoryEnv></MemoryEnv>
@@ -252,7 +252,7 @@
               <IROM>
                 <Type>1</Type>
                 <StartAddress>0x8000000</StartAddress>
-                <Size>0x80000</Size>
+                <Size>0x40000</Size>
               </IROM>
               <XRAM>
                 <Type>0</Type>
@@ -277,7 +277,7 @@
               <OCR_RVCT4>
                 <Type>1</Type>
                 <StartAddress>0x8000000</StartAddress>
-                <Size>0x80000</Size>
+                <Size>0x40000</Size>
               </OCR_RVCT4>
               <OCR_RVCT5>
                 <Type>1</Type>
@@ -424,21 +424,6 @@
               <FileType>1</FileType>
               <FilePath>..\src\platform\board\stm32f407ve\board.c</FilePath>
             </File>
-            <File>
-              <FileName>board_devices.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\src\platform\board\stm32f407ve\board_devices.c</FilePath>
-            </File>
-            <File>
-              <FileName>board_clock.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\src\platform\board\stm32f407ve\board_clock.c</FilePath>
-            </File>
-            <File>
-              <FileName>board_pins.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\src\platform\board\stm32f407ve\board_pins.c</FilePath>
-            </File>
           </Files>
         </Group>
         <Group>
@@ -470,6 +455,21 @@
               <FilePath>..\src\platform\stm32f407\drv_spi.c</FilePath>
             </File>
             <File>
+              <FileName>drv_i2c.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\platform\stm32f407\drv_i2c.c</FilePath>
+            </File>
+            <File>
+              <FileName>drv_adc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\platform\stm32f407\drv_adc.c</FilePath>
+            </File>
+            <File>
+              <FileName>drv_pwm.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\platform\stm32f407\drv_pwm.c</FilePath>
+            </File>
+            <File>
               <FileName>stm32f407_map.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\src\platform\stm32f407\stm32f407_map.c</FilePath>
@@ -493,6 +493,21 @@
               <FileName>stm32f407_console.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\src\platform\stm32f407\stm32f407_console.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32f407_fault.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\platform\stm32f407\stm32f407_fault.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32f407_iwdg.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\platform\stm32f407\stm32f407_iwdg.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32f407_nvm.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\platform\stm32f407\stm32f407_nvm.c</FilePath>
             </File>
             <File>
               <FileName>stm32f407_panic.c</FileName>
@@ -525,6 +540,21 @@
               <FilePath>..\src\framework\core\fw_spi.c</FilePath>
             </File>
             <File>
+              <FileName>fw_i2c.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\framework\core\fw_i2c.c</FilePath>
+            </File>
+            <File>
+              <FileName>fw_adc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\framework\core\fw_adc.c</FilePath>
+            </File>
+            <File>
+              <FileName>fw_pwm.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\framework\core\fw_pwm.c</FilePath>
+            </File>
+            <File>
               <FileName>fw_display.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\src\framework\core\fw_display.c</FilePath>
@@ -533,6 +563,16 @@
               <FileName>fw_clock.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\src\framework\core\fw_clock.c</FilePath>
+            </File>
+            <File>
+              <FileName>fw_log.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\framework\core\fw_log.c</FilePath>
+            </File>
+            <File>
+              <FileName>fw_param.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\framework\core\fw_param.c</FilePath>
             </File>
             <File>
               <FileName>fw_ring.c</FileName>
@@ -573,6 +613,11 @@
               <FileName>rtthread_clock.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\src\framework\port\rtthread\rtthread_clock.c</FilePath>
+            </File>
+            <File>
+              <FileName>rtthread_log.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\framework\port\rtthread\rtthread_log.c</FilePath>
             </File>
             <File>
               <FileName>rtthread_task.c</FileName>
@@ -743,6 +788,41 @@
               <FileName>stm32f4xx_hal_uart.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\src\third_party\stm32f4\hal\Src\stm32f4xx_hal_uart.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32f4xx_hal_i2c.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\third_party\stm32f4\hal\Src\stm32f4xx_hal_i2c.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32f4xx_hal_i2c_ex.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\third_party\stm32f4\hal\Src\stm32f4xx_hal_i2c_ex.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32f4xx_hal_adc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\third_party\stm32f4\hal\Src\stm32f4xx_hal_adc.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32f4xx_hal_adc_ex.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\third_party\stm32f4\hal\Src\stm32f4xx_hal_adc_ex.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32f4xx_hal_tim.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\third_party\stm32f4\hal\Src\stm32f4xx_hal_tim.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32f4xx_hal_tim_ex.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\third_party\stm32f4\hal\Src\stm32f4xx_hal_tim_ex.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32f4xx_hal_iwdg.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\third_party\stm32f4\hal\Src\stm32f4xx_hal_iwdg.c</FilePath>
             </File>
             <File>
               <FileName>system_stm32f4xx.c</FileName>

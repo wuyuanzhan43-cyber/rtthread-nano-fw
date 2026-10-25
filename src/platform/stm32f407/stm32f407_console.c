@@ -47,6 +47,14 @@ static void console_poll_write(drv_serial_t *console, const uint8_t *data,
     }
 }
 
+void stm32f407_console_panic_write(const char *str)
+{
+    drv_serial_t *console = s_console;
+
+    if (console == NULL || console->instance == NULL || str == NULL) return;
+    console_poll_write(console, (const uint8_t *)str, strlen(str));
+}
+
 void rt_hw_console_output(const char *str)
 {
     drv_serial_t *console = s_console;
