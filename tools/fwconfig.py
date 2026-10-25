@@ -30,6 +30,8 @@ import shutil
 import subprocess
 import sys
 
+import genconfig as genconfig_mod
+
 # 项目根目录 = tools/ 的上一级；后续所有路径都从这里派生。
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PROFILES = ROOT / "profiles"
@@ -80,8 +82,11 @@ def sync(name: str) -> int:
     """从 .config 生成 profile 的头文件和 CMake 片段。
 
     genconfig.py 负责解析 Kconfig、校验配置并写出：
-        rtconfig.h / board_config.h / fw_config.h / fw_config.cmake
+        rtconfig.h / board_policy.h / fw_config.h / fw_config.cmake
         config_summary.txt
+
+    板级接线（引脚/通道/内存/LCD/NVM）在 hand-written board_config.h，
+    不由生成器输出。
     """
     ensure_config(name)
     _, defconfig, config, generated = profile_dirs(name)
@@ -158,7 +163,32 @@ def check_layout() -> int:
         # 通用启动/console/IRQ 已下沉到 platform/stm32f407。
         ROOT / "src" / "platform" / "board" / "stm32f407ve" / "board_console.c",
         ROOT / "src" / "platform" / "board" / "stm32f407ve" / "board_irq.c",
+        # manifest/boardgen 时代已删除；板级接线只在 board_config.h。
+        ROOT / "boards",
+        ROOT / "chips",
+        ROOT / "tools" / "boardgen.py",
+        ROOT / "tools" / "tests" / "test_boardgen.py",
+        # 拆分过细的旧板级模块。
+        ROOT / "src" / "platform" / "board" / "stm32f407ve" / "board_devices.c",
+        ROOT / "src" / "platform" / "board" / "stm32f407ve" / "board_peripherals.c",
+        ROOT / "src" / "platform" / "board" / "stm32f407ve" / "board_display.c",
+        ROOT / "src" / "platform" / "board" / "stm32f407ve" / "board_storage.c",
+        ROOT / "src" / "platform" / "board" / "stm32f407ve" / "board_pins.c",
+        ROOT / "src" / "platform" / "board" / "stm32f407ve" / "board_pins.h",
+        ROOT / "src" / "platform" / "board" / "stm32f407ve" / "board_clock.c",
+        ROOT / "src" / "platform" / "board" / "stm32f407ve" / "board_clock.h",
+        ROOT / "src" / "platform" / "board" / "stm32f407ve" / "board_init.h",
     ]
+
+    # profile 只保留 defconfig/.config/generated 策略；旧 manifest 选择已删除。
+    for profile in PROFILES.iterdir():
+        if not profile.is_dir():
+            continue
+        forbidden.append(profile / "profile.json")
+        for name in ("board_config.h", "board_desc.h", "board_memory.ld",
+                     "board_keil.json", "board_summary.txt", "board_pinout.md",
+                     "board_channels.md"):
+            forbidden.append(profile / "generated" / name)
     for path in forbidden:
         if path.exists():
             errors.append(f"legacy path still exists: {path.relative_to(ROOT)}")

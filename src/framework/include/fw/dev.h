@@ -91,7 +91,10 @@ enum fw_dev_type {
     FW_DEV_TYPE_PIN = 1,
     FW_DEV_TYPE_SERIAL,
     FW_DEV_TYPE_SPI,
-    FW_DEV_TYPE_DISPLAY
+    FW_DEV_TYPE_DISPLAY,
+    FW_DEV_TYPE_I2C,
+    FW_DEV_TYPE_ADC,
+    FW_DEV_TYPE_PWM
 };
 
 struct fw_dev;
@@ -199,6 +202,7 @@ typedef struct fw_dev {
     size_t ref_count;
     const fw_dev_ops_t *ops;
     const fw_drv_t *drv;
+    volatile uint32_t error_count; /* 类层累计的负结果次数，用于诊断 */
 } fw_dev_t;
 
 /*
@@ -293,5 +297,14 @@ int fw_dev_isr(fw_dev_t *dev, int event, void *args);
 
 /* 类型判断辅助函数：dev 非空且 type 匹配时返回 true。 */
 bool fw_dev_is_type(const fw_dev_t *dev, int type);
+
+/*
+ * 设备错误计数。
+ *
+ * 类层在驱动返回负值时调用 note_error；count 只增不减，供诊断/RPC
+ * 或调试器读取。计数不是原子操作：同一设备应保持单 owner 使用。
+ */
+void fw_dev_note_error(fw_dev_t *dev);
+uint32_t fw_dev_error_count(const fw_dev_t *dev);
 
 #endif

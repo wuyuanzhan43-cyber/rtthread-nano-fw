@@ -73,7 +73,7 @@ target_compile_options(fw_v2 PRIVATE
 
 # 链接参数：
 #   -mcpu/-mthumb/-mfpu/-mfloat-abi 与编译选项一致（Cortex-M4F 硬浮点）；
-#   -T link.lds 使用板级链接脚本，并通过 -L 找到生成的 board_memory.ld；
+#   -T link.lds 使用板级链接脚本（内存区域已内联，无需 -L）；
 #   -e entry 指定 RT-Thread 的 entry 作为入口；
 #   --gc-sections 回收未使用的函数/数据（配合 -ffunction-sections）；
 #   nano.specs + nosys.specs 使用精简 libc 并忽略未实现系统调用；
@@ -81,7 +81,6 @@ target_compile_options(fw_v2 PRIVATE
 target_link_options(fw_v2 PRIVATE
     "-mcpu=cortex-m4" "-mthumb" "-mfloat-abi=hard" "-mfpu=fpv4-sp-d16"
     "-T${FW_BOARD_DIR}/link.lds"
-    "-L${FW_GEN_DIR}"
     "-eentry"
     "-Wl,--gc-sections"
     "-Wl,--print-memory-usage"

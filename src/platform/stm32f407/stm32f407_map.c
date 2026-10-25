@@ -136,7 +136,7 @@ SPI_TypeDef *stm32f407_spi(uint8_t instance)
     }
 }
 
-/* SPI 编号 -> IRQ 号；当前轮询模式不使用，保留给 DMA/中断扩展。 */
+/* SPI 编号 -> IRQ 号；DMA 模式下用于 OVR/MODF/FRE 错误中断。 */
 IRQn_Type stm32f407_spi_irq(uint8_t instance)
 {
     switch (instance) {
@@ -156,6 +156,131 @@ void stm32f407_spi_clock_enable(uint8_t instance)
     case 3U: __HAL_RCC_SPI3_CLK_ENABLE(); break;
     default: break;
     }
+}
+
+/* I2C 编号 -> 寄存器基址。 */
+I2C_TypeDef *stm32f407_i2c(uint8_t instance)
+{
+    switch (instance) {
+    case 1U: return I2C1;
+    case 2U: return I2C2;
+    case 3U: return I2C3;
+    default: return NULL;
+    }
+}
+
+/* 使能 I2C 时钟；I2C1/2 在 rcc.h，I2C3 在 rcc_ex.h。 */
+void stm32f407_i2c_clock_enable(uint8_t instance)
+{
+    switch (instance) {
+    case 1U: __HAL_RCC_I2C1_CLK_ENABLE(); break;
+    case 2U: __HAL_RCC_I2C2_CLK_ENABLE(); break;
+    case 3U: __HAL_RCC_I2C3_CLK_ENABLE(); break;
+    default: break;
+    }
+}
+
+ADC_TypeDef *stm32f407_adc1(void)
+{
+    return ADC1;
+}
+
+void stm32f407_adc_clock_enable(void)
+{
+    __HAL_RCC_ADC1_CLK_ENABLE();
+}
+
+TIM_TypeDef *stm32f407_tim4(void)
+{
+    return TIM4;
+}
+
+void stm32f407_tim4_clock_enable(void)
+{
+    __HAL_RCC_TIM4_CLK_ENABLE();
+}
+
+/*
+ * APB1 分频不为 1 时，定时器时钟是 PCLK1 的 2 倍。
+ * 例如 HSE 168MHz：PCLK1=42MHz，TIM4CLK=84MHz；
+ * HSI 16MHz：APB1 不分频，TIM4CLK=PCLK1=16MHz。
+ */
+uint32_t stm32f407_tim4_clk(void)
+{
+    uint32_t pclk1 = HAL_RCC_GetPCLK1Freq();
+    if ((RCC->CFGR & RCC_CFGR_PPRE1) != RCC_CFGR_PPRE1_DIV1)
+        return pclk1 * 2U;
+    return pclk1;
+}
+
+/*
+ * DMA stream 编号 -> CMSIS 寄存器块。
+ *
+ * 之所以用 switch 而不是基址+偏移，是因为 DMA1/DMA2 的 stream 寄存器
+ * 是 0x18 字节步进的独立块，直接使用 CMSIS 符号更清晰，也避免把
+ * 寄存器布局假设写死。
+ */
+DMA_Stream_TypeDef *stm32f407_dma_stream(uint8_t controller, uint8_t stream)
+{
+    if (controller == 1U) {
+        switch (stream) {
+        case 0U: return DMA1_Stream0;
+        case 1U: return DMA1_Stream1;
+        case 2U: return DMA1_Stream2;
+        case 3U: return DMA1_Stream3;
+        case 4U: return DMA1_Stream4;
+        case 5U: return DMA1_Stream5;
+        case 6U: return DMA1_Stream6;
+        case 7U: return DMA1_Stream7;
+        default: return NULL;
+        }
+    }
+    if (controller == 2U) {
+        switch (stream) {
+        case 0U: return DMA2_Stream0;
+        case 1U: return DMA2_Stream1;
+        case 2U: return DMA2_Stream2;
+        case 3U: return DMA2_Stream3;
+        case 4U: return DMA2_Stream4;
+        case 5U: return DMA2_Stream5;
+        case 6U: return DMA2_Stream6;
+        case 7U: return DMA2_Stream7;
+        default: return NULL;
+        }
+    }
+    return NULL;
+}
+
+/* DMA stream 编号 -> NVIC 中断号；非法组合返回 (IRQn_Type)-1。 */
+IRQn_Type stm32f407_dma_irq(uint8_t controller, uint8_t stream)
+{
+    if (controller == 1U) {
+        switch (stream) {
+        case 0U: return DMA1_Stream0_IRQn;
+        case 1U: return DMA1_Stream1_IRQn;
+        case 2U: return DMA1_Stream2_IRQn;
+        case 3U: return DMA1_Stream3_IRQn;
+        case 4U: return DMA1_Stream4_IRQn;
+        case 5U: return DMA1_Stream5_IRQn;
+        case 6U: return DMA1_Stream6_IRQn;
+        case 7U: return DMA1_Stream7_IRQn;
+        default: return (IRQn_Type)(-1);
+        }
+    }
+    if (controller == 2U) {
+        switch (stream) {
+        case 0U: return DMA2_Stream0_IRQn;
+        case 1U: return DMA2_Stream1_IRQn;
+        case 2U: return DMA2_Stream2_IRQn;
+        case 3U: return DMA2_Stream3_IRQn;
+        case 4U: return DMA2_Stream4_IRQn;
+        case 5U: return DMA2_Stream5_IRQn;
+        case 6U: return DMA2_Stream6_IRQn;
+        case 7U: return DMA2_Stream7_IRQn;
+        default: return (IRQn_Type)(-1);
+        }
+    }
+    return (IRQn_Type)(-1);
 }
 
 /*

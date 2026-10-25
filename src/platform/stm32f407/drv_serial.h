@@ -25,8 +25,23 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "fw/serial.h"
+#include "drv_dma.h"
 #include <rtthread.h>
 #include "stm32f4xx_hal.h"
+
+/*
+ * DMA 块大小；由 Kconfig 的 FW_SERIAL_DMA_CHUNK 生成到 fw_config.h。
+ * 未生成时给一个安全默认值，保证独立编译/测试也能通过。
+ *
+ * RX 缓冲 = 2 * CHUNK（DMA circular，半传输/全传输各完成一半）；
+ * TX staging = CHUNK（每次 DMA 启动只搬一块）。
+ */
+#ifndef FW_SERIAL_DMA_CHUNK
+#define FW_SERIAL_DMA_CHUNK 128
+#endif
+
+#define DRV_SERIAL_DMA_RX_BUFSZ (2U * FW_SERIAL_DMA_CHUNK)
+#define DRV_SERIAL_DMA_TX_BUFSZ (FW_SERIAL_DMA_CHUNK)
 
 /*
  * 板级串口描述符。
@@ -46,6 +61,15 @@ typedef struct {
     uint8_t rx_af;
     uint32_t baud;
     uint8_t irq_priority;
+    /*
+     * DMA 路由在 board_config.h 手写，Kconfig 只负责选择是否启用。
+     * controller/stream/channel 为 0xFF 表示未分配；enabled 为 false 时
+     * 驱动完全走原来的 RXNE/TXE 中断路径。
+     */
+    drv_dma_route_t dma_rx;
+    drv_dma_route_t dma_tx;
+    bool dma_rx_enabled;
+    bool dma_tx_enabled;
 } drv_serial_hw_t;
 
 /*
@@ -70,9 +94,32 @@ typedef struct {
     uint8_t irq_priority;
     struct rt_event rx_event;
     volatile bool started;
-    volatile bool tx_active;
+    volatile bool tx_active; /* IT 路径：TXE 是否已打开 */
     uint8_t rx_storage[FW_SERIAL_RX_BUFSZ];
     uint8_t tx_storage[FW_SERIAL_TX_BUFSZ];
+
+    /*
+     * DMA 状态。
+     *
+     * hdma_rx/hdma_tx 由本驱动持有并初始化；drv_dma.c 只记录 owner 和
+     * 分发 IRQ。rx_dma_buf 是 circular DMA 的目标，必须位于主 SRAM；
+     * tx_dma_buf 是 TX ring 的 staging 块，DMA 发送完成后再消费 ring。
+     *
+     * dma_rx_active/dma_tx_active 是“硬件正在搬运”的标志，供 configure、
+     * flush 和错误恢复判断，不用于 ring 计数。
+     */
+    DMA_HandleTypeDef hdma_rx;
+    DMA_HandleTypeDef hdma_tx;
+    drv_dma_route_t dma_rx_route;
+    drv_dma_route_t dma_tx_route;
+    uint8_t rx_dma_buf[DRV_SERIAL_DMA_RX_BUFSZ];
+    uint8_t tx_dma_buf[DRV_SERIAL_DMA_TX_BUFSZ];
+    volatile bool dma_rx_active;
+    volatile bool dma_tx_active;
+    volatile uint16_t tx_stage_len; /* 当前 staging 块长度，完成回调消费用 */
+    bool dma_rx_enabled;
+    bool dma_tx_enabled;
+
     fw_drv_t drv;
 } drv_serial_t;
 

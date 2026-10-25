@@ -61,6 +61,24 @@ config APP_RPC_LOOP_WAIT_MAX_MS
     default 500
     range 10 5000
 
+# 可控 worker 任务：用于验证任务控制（0x07 suspend/resume）和
+# 多任务健康度/CPU 统计。它不是业务必需的；如果关闭，需要从
+# app_task.c 中同时移除对应创建逻辑。
+config APP_WORKER_TASK_STACK_SIZE
+    int "Worker task stack (bytes)"
+    default 1024
+    range 512 8192
+
+config APP_WORKER_TASK_PRIORITY
+    int "Worker task priority"
+    default 12
+    range 0 31
+
+config APP_WORKER_PERIOD_MS
+    int "Worker loop period (ms)"
+    default 100
+    range 10 5000
+
 config APP_HEALTH_REFRESH_MS
     int "Health refresh period (ms)"
     default 1000

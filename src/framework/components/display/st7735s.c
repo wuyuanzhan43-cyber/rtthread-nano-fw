@@ -57,13 +57,13 @@ static fw_status_t pin_set(st7735s_t *lcd, int number, bool level)
  * 通过 SPI 发送一段数据。
  * 只发不收；返回 FW_OK 或底层错误码。
  */
-static fw_status_t spi_tx(st7735s_t *lcd, const uint8_t *data, size_t length)
+static fw_status_t spi_tx(st7735s_t *lcd, const uint8_t *data, size_t length,
+                          uint32_t timeout_ms)
 {
     if (lcd == NULL || lcd->spi == NULL || data == NULL || length == 0U)
         return FW_EINVAL;
     {
-        int result = fw_spi_transfer(lcd->spi, data, NULL, length,
-                                     ST7735_SPI_TIMEOUT_MS);
+        int result = fw_spi_transfer(lcd->spi, data, NULL, length, timeout_ms);
         return result < 0 ? (fw_status_t)result : FW_OK;
     }
 }
@@ -80,13 +80,14 @@ static fw_status_t spi_tx(st7735s_t *lcd, const uint8_t *data, size_t length)
  * 无论中间是否失败，最后都会尝试释放 CS，避免总线一直被占用；
  * 返回值是第一个错误（如果有）。
  */
-static fw_status_t write_cmd(st7735s_t *lcd, uint8_t command)
+static fw_status_t write_cmd(st7735s_t *lcd, uint8_t command,
+                             uint32_t timeout_ms)
 {
     fw_status_t result;
     result = pin_set(lcd, lcd->cs, false);
     if (result != FW_OK) return result;
     result = pin_set(lcd, lcd->dc, false);
-    if (result == FW_OK) result = spi_tx(lcd, &command, 1U);
+    if (result == FW_OK) result = spi_tx(lcd, &command, 1U, timeout_ms);
     (void)pin_set(lcd, lcd->cs, true);
     return result;
 }
@@ -98,7 +99,8 @@ static fw_status_t write_cmd(st7735s_t *lcd, uint8_t command)
  * 如果 length==0，则只发送命令。
  */
 static fw_status_t write_cmd_data(st7735s_t *lcd, uint8_t command,
-                                  const uint8_t *data, size_t length)
+                                  const uint8_t *data, size_t length,
+                                  uint32_t timeout_ms)
 {
     fw_status_t result;
     result = pin_set(lcd, lcd->cs, false);
@@ -106,12 +108,12 @@ static fw_status_t write_cmd_data(st7735s_t *lcd, uint8_t command,
 
     /* 先发命令字节（DC=0）。 */
     result = pin_set(lcd, lcd->dc, false);
-    if (result == FW_OK) result = spi_tx(lcd, &command, 1U);
+    if (result == FW_OK) result = spi_tx(lcd, &command, 1U, timeout_ms);
 
     /* 再发参数字节（DC=1）。 */
     if (result == FW_OK && length != 0U) {
         result = pin_set(lcd, lcd->dc, true);
-        if (result == FW_OK) result = spi_tx(lcd, data, length);
+        if (result == FW_OK) result = spi_tx(lcd, data, length, timeout_ms);
     }
 
     (void)pin_set(lcd, lcd->cs, true);
@@ -128,7 +130,7 @@ static fw_status_t write_cmd_data(st7735s_t *lcd, uint8_t command,
  * 调用者传入的是逻辑坐标，这里加上偏移再发给控制器。
  */
 static fw_status_t set_window(st7735s_t *lcd, uint16_t x0, uint16_t y0,
-                              uint16_t x1, uint16_t y1)
+                              uint16_t x1, uint16_t y1, uint32_t timeout_ms)
 {
     uint8_t data[4];
     fw_status_t result;
@@ -142,7 +144,7 @@ static fw_status_t set_window(st7735s_t *lcd, uint16_t x0, uint16_t y0,
     data[1] = (uint8_t)xs;
     data[2] = (uint8_t)(xe >> 8U);
     data[3] = (uint8_t)xe;
-    result = write_cmd_data(lcd, ST7735_CMD_CASET, data, 4U);
+    result = write_cmd_data(lcd, ST7735_CMD_CASET, data, 4U, timeout_ms);
     if (result != FW_OK) return result;
 
     /* RASET: YS[15:8], YS[7:0], YE[15:8], YE[7:0] */
@@ -150,7 +152,7 @@ static fw_status_t set_window(st7735s_t *lcd, uint16_t x0, uint16_t y0,
     data[1] = (uint8_t)ys;
     data[2] = (uint8_t)(ye >> 8U);
     data[3] = (uint8_t)ye;
-    return write_cmd_data(lcd, ST7735_CMD_RASET, data, 4U);
+    return write_cmd_data(lcd, ST7735_CMD_RASET, data, 4U, timeout_ms);
 }
 
 /*
@@ -216,48 +218,49 @@ static fw_status_t init_sequence(st7735s_t *lcd)
         0x2EU, 0x2EU, 0x37U, 0x3FU, 0x00U, 0x00U, 0x02U, 0x10U
     };
     uint8_t direction[1];
+    const uint32_t t = ST7735_SPI_TIMEOUT_MS;
     fw_status_t result;
 
     /* 软件复位后等待内部状态稳定。 */
-    result = write_cmd(lcd, ST7735_CMD_SWRESET);
+    result = write_cmd(lcd, ST7735_CMD_SWRESET, t);
     if (result != FW_OK) return result;
     fw_delay_ms(150U);
 
     /* 退出睡眠模式。 */
-    result = write_cmd(lcd, ST7735_CMD_SLPOUT);
+    result = write_cmd(lcd, ST7735_CMD_SLPOUT, t);
     if (result != FW_OK) return result;
     fw_delay_ms(120U);
 
     /* 帧率控制、电源控制、VCOM 等模拟参数。 */
-    if ((result = write_cmd_data(lcd, 0xB1U, frmctr1, sizeof(frmctr1))) != FW_OK) return result;
-    if ((result = write_cmd_data(lcd, 0xB2U, frmctr2, sizeof(frmctr2))) != FW_OK) return result;
-    if ((result = write_cmd_data(lcd, 0xB3U, frmctr3, sizeof(frmctr3))) != FW_OK) return result;
-    if ((result = write_cmd_data(lcd, 0xB4U, invctr, sizeof(invctr))) != FW_OK) return result;
-    if ((result = write_cmd_data(lcd, 0xC0U, pwctr1, sizeof(pwctr1))) != FW_OK) return result;
-    if ((result = write_cmd_data(lcd, 0xC1U, pwctr2, sizeof(pwctr2))) != FW_OK) return result;
-    if ((result = write_cmd_data(lcd, 0xC2U, pwctr3, sizeof(pwctr3))) != FW_OK) return result;
-    if ((result = write_cmd_data(lcd, 0xC3U, pwctr4, sizeof(pwctr4))) != FW_OK) return result;
-    if ((result = write_cmd_data(lcd, 0xC4U, pwctr5, sizeof(pwctr5))) != FW_OK) return result;
-    if ((result = write_cmd_data(lcd, 0xC5U, vmctr1, sizeof(vmctr1))) != FW_OK) return result;
+    if ((result = write_cmd_data(lcd, 0xB1U, frmctr1, sizeof(frmctr1), t)) != FW_OK) return result;
+    if ((result = write_cmd_data(lcd, 0xB2U, frmctr2, sizeof(frmctr2), t)) != FW_OK) return result;
+    if ((result = write_cmd_data(lcd, 0xB3U, frmctr3, sizeof(frmctr3), t)) != FW_OK) return result;
+    if ((result = write_cmd_data(lcd, 0xB4U, invctr, sizeof(invctr), t)) != FW_OK) return result;
+    if ((result = write_cmd_data(lcd, 0xC0U, pwctr1, sizeof(pwctr1), t)) != FW_OK) return result;
+    if ((result = write_cmd_data(lcd, 0xC1U, pwctr2, sizeof(pwctr2), t)) != FW_OK) return result;
+    if ((result = write_cmd_data(lcd, 0xC2U, pwctr3, sizeof(pwctr3), t)) != FW_OK) return result;
+    if ((result = write_cmd_data(lcd, 0xC3U, pwctr4, sizeof(pwctr4), t)) != FW_OK) return result;
+    if ((result = write_cmd_data(lcd, 0xC4U, pwctr5, sizeof(pwctr5), t)) != FW_OK) return result;
+    if ((result = write_cmd_data(lcd, 0xC5U, vmctr1, sizeof(vmctr1), t)) != FW_OK) return result;
 
     /* 根据板级配置决定是否反色。 */
     if (lcd->invert) {
-        if ((result = write_cmd(lcd, ST7735_CMD_INVON)) != FW_OK) return result;
+        if ((result = write_cmd(lcd, ST7735_CMD_INVON, t)) != FW_OK) return result;
     } else {
-        if ((result = write_cmd(lcd, ST7735_CMD_INVOFF)) != FW_OK) return result;
+        if ((result = write_cmd(lcd, ST7735_CMD_INVOFF, t)) != FW_OK) return result;
     }
 
     /* 扫描方向：MADCTL 决定行列递增方向和 RGB/BGR 顺序。 */
     direction[0] = lcd->madctl;
-    if ((result = write_cmd_data(lcd, ST7735_CMD_MADCTL, direction, 1U)) != FW_OK) return result;
+    if ((result = write_cmd_data(lcd, ST7735_CMD_MADCTL, direction, 1U, t)) != FW_OK) return result;
     /* 像素格式：0x05 = 16 位/像素（RGB565）。 */
-    if ((result = write_cmd_data(lcd, ST7735_CMD_COLMOD, colmod, sizeof(colmod))) != FW_OK) return result;
+    if ((result = write_cmd_data(lcd, ST7735_CMD_COLMOD, colmod, sizeof(colmod), t)) != FW_OK) return result;
     /* 正/负伽马曲线。 */
-    if ((result = write_cmd_data(lcd, 0xE0U, gmctrp1, sizeof(gmctrp1))) != FW_OK) return result;
-    if ((result = write_cmd_data(lcd, 0xE1U, gmctrn1, sizeof(gmctrn1))) != FW_OK) return result;
+    if ((result = write_cmd_data(lcd, 0xE0U, gmctrp1, sizeof(gmctrp1), t)) != FW_OK) return result;
+    if ((result = write_cmd_data(lcd, 0xE1U, gmctrn1, sizeof(gmctrn1), t)) != FW_OK) return result;
     /* 正常显示模式并打开显示。 */
-    if ((result = write_cmd(lcd, ST7735_CMD_NORON)) != FW_OK) return result;
-    if ((result = write_cmd(lcd, ST7735_CMD_DISPON)) != FW_OK) return result;
+    if ((result = write_cmd(lcd, ST7735_CMD_NORON, t)) != FW_OK) return result;
+    if ((result = write_cmd(lcd, ST7735_CMD_DISPON, t)) != FW_OK) return result;
 
     fw_delay_ms(100U);
     return FW_OK;
@@ -318,20 +321,19 @@ static fw_status_t st7735s_begin_write(void *ctx, uint16_t x, uint16_t y,
     st7735s_t *lcd = (st7735s_t *)ctx;
     const uint8_t ramwr = ST7735_CMD_RAMWR;
     fw_status_t result;
-    (void)timeout_ms; /* 超时统一使用 ST7735_SPI_TIMEOUT_MS */
 
     if (lcd == NULL || !lcd->ready || lcd->writing) return FW_EBUSY;
     if (width == 0U || height == 0U) return FW_EINVAL;
 
     result = set_window(lcd, x, y, (uint16_t)(x + width - 1U),
-                        (uint16_t)(y + height - 1U));
+                        (uint16_t)(y + height - 1U), timeout_ms);
     if (result != FW_OK) return result;
 
     /* 选中面板，发送“写显存”命令，然后把 DC 切到数据模式。 */
     result = pin_set(lcd, lcd->cs, false);
     if (result != FW_OK) return result;
     result = pin_set(lcd, lcd->dc, false);
-    if (result == FW_OK) result = spi_tx(lcd, &ramwr, 1U);
+    if (result == FW_OK) result = spi_tx(lcd, &ramwr, 1U, timeout_ms);
     if (result == FW_OK) result = pin_set(lcd, lcd->dc, true);
     if (result != FW_OK) {
         (void)pin_set(lcd, lcd->cs, true);
@@ -359,7 +361,6 @@ static fw_status_t st7735s_write_pixels(void *ctx, const uint16_t *pixels,
     uint8_t buffer[64];
     fw_status_t result = FW_OK;
     size_t offset = 0U;
-    (void)timeout_ms;
 
     if (lcd == NULL || !lcd->writing || pixels == NULL) return FW_EINVAL;
 
@@ -372,7 +373,7 @@ static fw_status_t st7735s_write_pixels(void *ctx, const uint16_t *pixels,
             buffer[i * 2U] = (uint8_t)(color >> 8U);      /* 高字节先发 */
             buffer[i * 2U + 1U] = (uint8_t)color;         /* 低字节后发 */
         }
-        result = spi_tx(lcd, buffer, chunk * 2U);
+        result = spi_tx(lcd, buffer, chunk * 2U, timeout_ms);
         offset += chunk;
     }
     return result;

@@ -40,11 +40,50 @@ void stm32f407_usart_clock_enable(uint8_t instance);
 /* SPI 实例编号 1..3 -> 寄存器基址；非法编号返回 NULL。 */
 SPI_TypeDef *stm32f407_spi(uint8_t instance);
 
-/* SPI 实例编号 1..3 -> NVIC 中断号（当前轮询传输用不到，保留）。 */
+/* SPI 实例编号 1..3 -> NVIC 中断号（DMA 模式下用于错误中断）。 */
 IRQn_Type stm32f407_spi_irq(uint8_t instance);
 
 /* 使能 SPI 时钟；非法编号静默忽略。 */
 void stm32f407_spi_clock_enable(uint8_t instance);
+
+/* I2C 实例编号 1..3 -> 寄存器基址；非法编号返回 NULL。 */
+I2C_TypeDef *stm32f407_i2c(uint8_t instance);
+
+/* 使能 I2C 时钟；非法编号静默忽略。 */
+void stm32f407_i2c_clock_enable(uint8_t instance);
+
+/* ADC1 寄存器基址；当前芯片只映射 ADC1。 */
+ADC_TypeDef *stm32f407_adc1(void);
+
+/* 使能 ADC1 时钟（包含 ADC 公共时钟）。 */
+void stm32f407_adc_clock_enable(void);
+
+/* TIM4 寄存器基址；PWM 设备 pwm4 使用。 */
+TIM_TypeDef *stm32f407_tim4(void);
+
+/* 使能 TIM4 时钟。 */
+void stm32f407_tim4_clock_enable(void);
+
+/*
+ * TIM4 的计数器时钟。
+ * APB1 分频为 1 时等于 PCLK1，否则等于 2*PCLK1。
+ * PWM 的 PSC/ARR 计算必须使用这个频率。
+ */
+uint32_t stm32f407_tim4_clk(void);
+
+/*
+ * DMA 映射：
+ *   controller 1=DMA1、2=DMA2；stream 0..7。
+ * dma_stream 返回 HAL 需要写入 DMA_HandleTypeDef.Instance 的寄存器块；
+ * dma_irq 返回该 stream 的 NVIC 中断号。
+ * 非法组合分别返回 NULL / (IRQn_Type)-1。
+ *
+ * 板级 DMA 路由（哪个外设用哪个 controller/stream/channel）在
+ * board_config.h 的 C 表中手写；这里只做“编号 -> CMSIS 符号”的纯映射，
+ * 不包含板级策略。
+ */
+DMA_Stream_TypeDef *stm32f407_dma_stream(uint8_t controller, uint8_t stream);
+IRQn_Type stm32f407_dma_irq(uint8_t controller, uint8_t stream);
 
 /*
  * 返回 SPI 所在总线的时钟频率：

@@ -3,16 +3,14 @@
 工程文件：
 
 ```text
-keil/stm32f407ve.uvprojx
+keil/stm32f407ve.uvprojx       # profiles/f407ve (HSI 16 MHz)
+keil/stm32f407ve-hse.uvprojx   # profiles/f407ve-hse (HSE 168 MHz)
 ```
 
-工程由 `project/sources.json` 和 `keil/project_template.uvprojx` 生成；配置与
-CMake 目标构建共用：
-
-```text
-profiles/f407ve/.config
-profiles/f407ve/generated/
-```
+工程由 `project/sources.json`、手写 `board_config.h`、生成的
+`profiles/<profile>/generated/board_policy.h` 和
+`keil/project_template.uvprojx` 生成；配置与 CMake 目标构建共用同一
+profile。板级接线不再有 manifest。
 
 不再有 `keil/.config` 或 `keil/generated/`。
 
@@ -28,7 +26,7 @@ profiles/f407ve/generated/
 | Pack | `Keil.STM32F4xx_DFP.3.1.1` |
 | 产物 | `build/keil/fw_v2.axf`、`fw_v2.hex`、`fw_v2.map` |
 
-本次目录重构后，`stm32f407ve.uvprojx` 已由 manifest 重新生成；
+board 层改为单文件 C 表后，`stm32f407ve.uvprojx` 已重新生成；
 需要在 UV4 中重新编译确认 0 Error(s) / 0 Warning(s)。
 
 ## 1. 打开工程
@@ -49,10 +47,12 @@ python tools/fwconfig.py sync --profile f407ve
 python tools/fwconfig.py gen-keil --profile f407ve
 ```
 
-- `sync` 只更新 `profiles/f407ve/.config` 对应的 generated 头文件和
-  `board_memory.ld`；
-- `gen-keil` 从 manifest + 模板重新生成 uvprojx，并从
-  `board_config.h` 的 FLASH/RAM 大小生成 `stm32f407ve.sct`。
+- `sync` 更新 generated 头文件（`rtconfig.h`、`fw_config.h`、
+  `app_config.h`、`board_policy.h`）和 CMake 片段；
+- `gen-keil` 从 source manifest + `board_config.h` + `board_policy.h` +
+  模板生成 uvprojx；Device/Vendor/Flash 算法/IRAM/IROM/Stack 来自
+  `board_config.h`，CLOCK 来自时钟源选择；
+  同时生成 profile 对应的 `.sct` 和启动文件 `Stack_Size`。
 
 交互式修改 Keil 使用的配置：
 
@@ -85,7 +85,8 @@ fromelf --bin --output build\keil\fw_v2.bin build\keil\fw_v2.axf
    ST-Link / CMSIS-DAP / J-Link。
 2. `Utilities` 勾选 `Use Debug Driver`。
 3. `Settings → Flash Download` 确认算法为 `STM32F4xx 512KB Flash`，
-   勾选 `Reset and Run`。
+   勾选 `Reset and Run`。工程 IROM 是 256KB，下载/擦除范围不会覆盖
+   尾部 256KB 的 NVM 参数区。
 4. 按 `F8` 下载，`Ctrl+F5` 调试。
 
 也可以直接用 STM32CubeProgrammer / ST-Link Utility 打开
@@ -103,11 +104,12 @@ UV4.exe -f keil\stm32f407ve.uvprojx -j0
 |---|---|
 | `project_template.uvprojx` | 固定 AC5/器件/scatter/输出选项的模板 |
 | `stm32f407ve.uvprojx` | 由 `tools/gen_keil.py` 生成的工程 |
-| `startup_stm32f407xx.s` | ARM 语法启动文件，Stack_Size = 0x1000（需与 `BOARD_MIN_STACK_SIZE` 一致） |
+| `startup_stm32f407xx.s` | 由 `BOARD_MIN_STACK_SIZE` 生成 `Stack_Size`，不要手改 |
 | `scatter_template.sct` | scatter 模板，占位符由 `gen_keil.py` 替换 |
-| `stm32f407ve.sct` | 由 `board_config.h` 的 FLASH/RAM 大小生成 |
+| `stm32f407ve*.sct` | 由 `board_config.h` 的地址/代码区大小生成 |
 
-`profiles/f407ve/generated/` 是 include 路径中的配置头文件。
+`profiles/f407ve/generated/` 是 include 路径中的配置头文件；
+`board_config.h` 本身在 `src/platform/board/stm32f407ve/`。
 
 启动链路：
 
@@ -126,5 +128,5 @@ startup __main
 | 提示缺少 device pack | Pack Installer 安装 `Keil.STM32F4xx_DFP` |
 | 汇编报 A1023E | 确认 `src/vendor/rt-thread-nano/libcpu/arm/cortex-m4/context_rvds.S` 存在 |
 | 配置修改后不生效 | 运行 `fwconfig.py sync --profile f407ve`，再 Rebuild |
-| 手工改 uvprojx 后检查失败 | 改 `project/sources.json` 或模板，再 `gen-keil` |
+| 手工改 uvprojx 后检查失败 | 改 `project/sources.json`、`board_config.h` 或模板，再 `gen-keil` |
 | 只有 AC6 | 当前工程不适用；需要 ARMCLANG 适配 |

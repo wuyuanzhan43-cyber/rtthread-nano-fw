@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""从 Kconfig 的 .config 生成 C 头文件、CMake 片段、内存脚本和配置摘要。
+"""从 Kconfig 的 .config 生成 C 头文件、CMake 片段和配置摘要。
 
-Kconfig 树是 v2 的唯一配置源。本脚本：
+Kconfig 树是构建策略的唯一来源；板级接线在 board_config.h 手写。本脚本：
     1. 用 kconfiglib 解析 Kconfig 并载入 profile 的 .config；
     2. 把符号值分成 RT_ / BOARD_ / FW_ / APP_ 四组，生成对应头文件；
-    3. 生成 CMake 侧 CONFIG_* 变量和 board_memory.ld；
-    4. 校验端口 0..4、SWD 保留脚、引脚冲突、控制台/LCD/DMA 等约束；
-    5. 支持 --check：只比较不写，供 CTest 防止生成物漂移。
+    3. 生成 CMake 侧 CONFIG_* 变量；
+    4. 校验应用/组件组合、IRQ 优先级、时钟源、内存容量等策略约束；
+    5. 支持 --check：只比较不写，供 CTest 防止生成物漂移；
+    6. sync 时删除 boardgen 时代遗留的生成物。
 
 调用者：
     - CMake 在 configure 阶段通过 tools/fwconfig.py sync 调用；
@@ -33,6 +34,36 @@ HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "kconfiglib"))
 
 import kconfiglib  # noqa: E402
+
+# 手写 board_config.h 后，这些旧生成物必须从 generated 目录清除。
+# generated 在 include 路径最前；残留会遮蔽手写头或造成内存/Keil 漂移。
+OBSOLETE_OUTPUTS = (
+    "board_config.h",
+    "board_desc.h",
+    "board_memory.ld",
+    "board_keil.json",
+    "board_summary.txt",
+    "board_pinout.md",
+    "board_channels.md",
+)
+
+
+def unknown_config_keys(config_path: pathlib.Path, kconf) -> list[str]:
+    """返回 .config 中已不存在于 Kconfig 树的键。
+
+    板级接线迁移到 board_config.h 后，旧的 CONFIG_BOARD_* 拓扑键
+    必须被清理；否则它们会静默留在 .config 里，形成第二份事实。
+    """
+    known = {sym.name for sym in kconf.unique_defined_syms}
+    unknown: list[str] = []
+    for raw in config_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line.startswith("CONFIG_") or "=" not in line:
+            continue
+        name = line[len("CONFIG_"):].split("=", 1)[0].strip()
+        if name not in known:
+            unknown.append(name)
+    return unknown
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -172,6 +203,7 @@ def render_cmake(symbols: dict[str, tuple[str, object]]) -> str:
     每个 Kconfig 符号变成 CONFIG_<NAME>：
         bool   -> ON/OFF
         string -> 带引号
+        raw    -> 跳过（C 初始化列表，不参与 CMake）
         其他   -> 原值
     CMakeLists 通过 CONFIG_FW_PLATFORM_* 选择构建分支。
     """
@@ -182,6 +214,8 @@ def render_cmake(symbols: dict[str, tuple[str, object]]) -> str:
     ]
     for name in sorted(symbols):
         kind, value = symbols[name]
+        if kind == "raw":
+            continue
         if kind == "bool":
             lines.append(f"set(CONFIG_{name} {'ON' if value else 'OFF'})")
         elif kind == "string":
@@ -208,16 +242,15 @@ def render_summary(target: str, symbols: dict[str, tuple[str, object]]) -> str:
 def validate(symbols: dict[str, tuple[str, object]]) -> list[str]:
     """校验配置组合，返回错误字符串列表。
 
-    APP_* 在所有 profile 上校验；引脚/外设相关项只在 STM32 目标上校验。
-    检查项：
+    APP_* 在所有 profile 上校验；任务/RT 相关项只在 STM32 目标上校验。
+    板级引脚/AF/内存由手写 board_config.h 和静态测试负责；这里只校验
+    Kconfig 策略（时钟源、容量、时序、IRQ 优先级）：
+    这里只保留：
       0. APP_BOOT_MODE 必须在 0..2；
       1. 必备组件开关必须为 y；
-      2. 所有引脚编号在 0..8 / 0..15；
-      3. UART TX/RX 不能同引脚；
-      4. 控制台选择的 UART 必须已启用；
-      5. LCD 使用的 SPI 必须已启用；
-      6. 所有已启用外设之间不能有引脚冲突；
-      7. DMA 当前未实现，必须保持 n。
+      2. RPC 等待、心跳 warn/lost 必须满足时序关系；
+      3. 任务优先级必须小于 RT_THREAD_PRIORITY_MAX；
+      4. 任务表和设备表容量必须覆盖 app 的最小需求。
     """
     errors: list[str] = []
 
@@ -257,69 +290,103 @@ def validate(symbols: dict[str, tuple[str, object]]) -> list[str]:
         if not enabled(name):
             errors.append(f"{name} must be y in v2 first version")
 
-    used: list[tuple[int, int, str]] = []
+    # SPI DMA 的完成同步依赖 RT-Thread 信号量（仅在驱动内部使用，
+    # framework/core 仍然保持 OS 中立）。
+    if any(enabled(f"FW_USING_SPI{number}_DMA") for number in (1, 2, 3)):
+        if not enabled("RT_USING_SEMAPHORE"):
+            errors.append("SPI DMA requires RT_USING_SEMAPHORE=y")
 
-    def add_pin(label: str, port_name: str, pin_name: str) -> tuple[int, int]:
-        """读取端口/引脚对，做范围检查并登记，供冲突检测使用。"""
-        port = val(port_name)
-        pin = val(pin_name)
-        if not 0 <= port <= 4:
-            errors.append(f"{port_name} must be 0..4 (A..E), got {port}")
-        if not 0 <= pin <= 15:
-            errors.append(f"{pin_name} must be 0..15, got {pin}")
-        if port == 0 and pin in (13, 14):
-            errors.append(f"{label} uses SWD pin PA{pin}; PA13/PA14 are reserved")
-        used.append((port, pin, label))
-        return port, pin
+    # 任务/心跳/优先级交叉约束。单看每个范围都合法，组合起来却可能
+    # 让 RPC 长等待越过心跳阈值、或让 fw_task_create 直接失败。
+    task_max = val("FW_TASK_MAX")
+    if task_max < 3:
+        errors.append(f"FW_TASK_MAX must be >= 3 (main + rpc + worker), got {task_max}")
 
-    if enabled("BOARD_LED_ENABLE"):
-        add_pin("LED", "BOARD_LED_PORT", "BOARD_LED_PIN")
+    # 设备表必须容纳所有启用的类实例：pin 一个、LCD 一个，
+    # UART/SPI/I2C 每启用一个实例占一个槽位，ADC/PWM 每个控制器一个。
+    need_devices = 1
+    if enabled("BOARD_LCD_ENABLE"):
+        need_devices += 1
+    for number in (1, 2, 3):
+        if enabled(f"FW_USING_UART{number}"):
+            need_devices += 1
+        if enabled(f"FW_USING_SPI{number}"):
+            need_devices += 1
+        if enabled(f"FW_USING_I2C{number}"):
+            need_devices += 1
+    if enabled("FW_USING_ADC1"):
+        need_devices += 1
+    if enabled("FW_USING_PWM4"):
+        need_devices += 1
+    dev_max = val("FW_DEV_MAX")
+    if dev_max < need_devices:
+        errors.append(
+            f"FW_DEV_MAX must be >= {need_devices} for the enabled devices, "
+            f"got {dev_max}")
 
-    # UART：检查 TX/RX 不同引脚；每个实例只在启用时登记。
-    for n in (1, 2, 3):
-        if enabled(f"FW_USING_UART{n}"):
-            tx = add_pin(f"UART{n}_TX", f"BOARD_UART{n}_TX_PORT", f"BOARD_UART{n}_TX_PIN")
-            rx = add_pin(f"UART{n}_RX", f"BOARD_UART{n}_RX_PORT", f"BOARD_UART{n}_RX_PIN")
-            if tx == rx:
-                errors.append(f"UART{n} TX and RX cannot use the same pin")
+    if enabled("FW_USING_ADC1"):
+        bits = val("BOARD_ADC1_RESOLUTION_BITS")
+        if bits not in (8, 10, 12):
+            errors.append(f"BOARD_ADC1_RESOLUTION_BITS must be 8/10/12, got {bits}")
+        cycles = val("BOARD_ADC1_SAMPLE_CYCLES")
+        if cycles not in (3, 15, 28, 56, 84, 112, 144, 480):
+            errors.append(
+                "BOARD_ADC1_SAMPLE_CYCLES must be one of "
+                f"3/15/28/56/84/112/144/480, got {cycles}")
 
-    # 控制台必须指向一个已启用的 UART。
-    console = val("BOARD_CONSOLE_UART_NUM")
-    if console not in (1, 2, 3):
-        errors.append(f"BOARD_CONSOLE_UART_NUM must be 1..3, got {console}")
-    elif not enabled(f"FW_USING_UART{console}"):
-        errors.append(f"console UART{console} is selected but FW_USING_UART{console}=n")
+    for number in (1, 2, 3):
+        if enabled(f"FW_USING_I2C{number}"):
+            speed = val(f"BOARD_I2C{number}_SPEED_HZ")
+            if not 10000 <= speed <= 400000:
+                errors.append(
+                    f"BOARD_I2C{number}_SPEED_HZ must be 10000..400000, got {speed}")
+    if enabled("FW_USING_PWM4"):
+        pwm_hz = val("BOARD_PWM4_PERIOD_HZ")
+        if pwm_hz <= 0:
+            errors.append(f"BOARD_PWM4_PERIOD_HZ must be > 0, got {pwm_hz}")
 
-    # SPI：只有启用 MISO 时才登记 MISO 引脚。
-    for n in (1, 2, 3):
-        if enabled(f"FW_USING_SPI{n}"):
-            add_pin(f"SPI{n}_SCK", f"BOARD_SPI{n}_SCK_PORT", f"BOARD_SPI{n}_SCK_PIN")
-            add_pin(f"SPI{n}_MOSI", f"BOARD_SPI{n}_MOSI_PORT", f"BOARD_SPI{n}_MOSI_PIN")
-            if enabled(f"BOARD_SPI{n}_USE_MISO"):
-                add_pin(f"SPI{n}_MISO", f"BOARD_SPI{n}_MISO_PORT", f"BOARD_SPI{n}_MISO_PIN")
+    if enabled("BOARD_IWDG_ENABLE"):
+        iwdg = val("BOARD_IWDG_TIMEOUT_MS")
+        lost_ms = val("APP_TASK_HEARTBEAT_LOST_MS")
+        refresh_ms = val("APP_HEALTH_REFRESH_MS")
+        if iwdg <= lost_ms + refresh_ms:
+            errors.append(
+                "BOARD_IWDG_TIMEOUT_MS must be > "
+                "APP_TASK_HEARTBEAT_LOST_MS + APP_HEALTH_REFRESH_MS; "
+                f"got {iwdg} <= {lost_ms}+{refresh_ms}")
 
-    # LCD：依赖 display 组件、一个已启用的 SPI，以及 CS/DC/RES/BL 四根引脚。
-    lcd = enabled("BOARD_LCD_ENABLE")
-    if lcd:
-        if not enabled("FW_USE_DISPLAY"):
-            errors.append("BOARD_LCD_ENABLE requires FW_USE_DISPLAY")
-        instance = val("BOARD_LCD_SPI_INSTANCE")
-        if instance not in (1, 2, 3):
-            errors.append(f"BOARD_LCD_SPI_INSTANCE must be 1..3, got {instance}")
-        elif not enabled(f"FW_USING_SPI{instance}"):
-            errors.append(f"LCD uses spi{instance} but FW_USING_SPI{instance}=n")
-        for prefix in ("CS", "DC", "RES", "BL"):
-            add_pin(f"LCD_{prefix}", f"BOARD_LCD_{prefix}_PORT", f"BOARD_LCD_{prefix}_PIN")
+    hsi = enabled("BOARD_CLOCK_HSI_16")
+    hse = enabled("BOARD_CLOCK_HSE_8_168")
+    if hsi == hse:
+        errors.append("exactly one of BOARD_CLOCK_HSI_16 / "
+                      "BOARD_CLOCK_HSE_8_168 must be enabled")
 
-    # 引脚冲突检测：两两比较所有已登记引脚。
-    for index, (port, pin, label) in enumerate(used):
-        for other_port, other_pin, other_label in used[index + 1:]:
-            if (port, pin) == (other_port, other_pin):
-                errors.append(f"{label} and {other_label} both use P{port}{pin}")
+    rpc_wait = val("APP_RPC_LOOP_WAIT_MAX_MS")
+    worker_period = val("APP_WORKER_PERIOD_MS")
+    hb_warn = val("APP_TASK_HEARTBEAT_WARN_MS")
+    hb_lost = val("APP_TASK_HEARTBEAT_LOST_MS")
+    if not 0 < rpc_wait < hb_warn < hb_lost:
+        errors.append(
+            "must satisfy APP_RPC_LOOP_WAIT_MAX_MS < "
+            "APP_TASK_HEARTBEAT_WARN_MS < APP_TASK_HEARTBEAT_LOST_MS; "
+            f"got {rpc_wait}/{hb_warn}/{hb_lost}")
+    if not 0 < worker_period < hb_warn:
+        errors.append(
+            "APP_WORKER_PERIOD_MS must be < APP_TASK_HEARTBEAT_WARN_MS; "
+            f"got {worker_period}/{hb_warn}")
 
-    # DMA 路径尚未实现；与其静默忽略，不如在生成阶段直接拒绝。
-    if enabled("BOARD_UART_DMA"):
-        errors.append("BOARD_UART_DMA is not implemented in v2 yet; keep it n")
+    priority_max = val("RT_THREAD_PRIORITY_MAX")
+    for name in ("RT_MAIN_THREAD_PRIORITY", "APP_RPC_TASK_PRIORITY",
+                 "APP_WORKER_TASK_PRIORITY"):
+        priority = val(name)
+        if priority >= priority_max:
+            errors.append(
+                f"{name}={priority} must be < RT_THREAD_PRIORITY_MAX={priority_max}")
+
+    worker_stack = val("APP_WORKER_TASK_STACK_SIZE")
+    if worker_stack % 8 != 0:
+        errors.append(
+            f"APP_WORKER_TASK_STACK_SIZE must be a multiple of 8, got {worker_stack}")
 
     return errors
 
@@ -340,40 +407,23 @@ def write_if_changed(path: pathlib.Path, content: str) -> bool:
     return True
 
 
-def render_memory_ld(symbols: dict[str, tuple[str, object]]) -> str:
-    """从 BOARD_* 内存符号生成 GCC 链接脚本片段。"""
+def render_board_policy(symbols: dict[str, tuple[str, object]]) -> str:
+    """生成板级策略头。
 
-    def value(name: str, default: str) -> str:
-        item = symbols.get(name)
-        return str(item[1]) if item is not None else default
-
-    def kb(name: str, default: int) -> int:
-        try:
-            return int(value(name, str(default)))
-        except (TypeError, ValueError):
-            return default
-
-    flash_origin = value("BOARD_FLASH_ORIGIN", "0x08000000")
-    ram_origin = value("BOARD_RAM_ORIGIN", "0x20000000")
-    ccm_origin = value("BOARD_CCM_ORIGIN", "0x10000000")
-    flash_kb = kb("BOARD_FLASH_SIZE_KB", 512)
-    ram_kb = kb("BOARD_RAM_SIZE_KB", 128)
-    ccm_kb = kb("BOARD_CCM_SIZE_KB", 64)
-    min_stack = value("BOARD_MIN_STACK_SIZE", "4096")
-
-    return "\n".join([
-        "/* Generated by tools/genconfig.py. Do not edit. */",
-        "/* Board memory map; included by link.lds. */",
-        "",
-        f"BOARD_FLASH_ORIGIN = {flash_origin};",
-        f"BOARD_FLASH_LENGTH = {flash_kb}K;",
-        f"BOARD_RAM_ORIGIN = {ram_origin};",
-        f"BOARD_RAM_LENGTH = {ram_kb}K;",
-        f"BOARD_CCM_ORIGIN = {ccm_origin};",
-        f"BOARD_CCM_LENGTH = {ccm_kb}K;",
-        f"BOARD_MIN_STACK_SIZE = {min_stack};",
-        "",
-    ])
+    Host 没有板级策略：输出空头，让手写 board_config.h 的 #ifndef 默认值
+    生效，避免 host 的 Kconfig 把 BOARD_CLOCK_* 等符号静默定义成 0。
+    """
+    if symbols.get("FW_PLATFORM_HOST", ("bool", False))[1]:
+        return (
+            "/*\n"
+            " * board_policy.h - generated by tools/genconfig.py. Do not edit.\n"
+            " * Host build: no board policy; board_config.h defaults apply.\n"
+            " */\n"
+            "#ifndef FW_GENERATED_BOARD_POLICY_H\n"
+            "#define FW_GENERATED_BOARD_POLICY_H\n\n"
+            "#endif /* FW_GENERATED_BOARD_POLICY_H */\n"
+        )
+    return render_header("board_policy.h", "Board build policy", symbols, "BOARD_")
 
 
 def generate(symbols: dict[str, tuple[str, object]], outdir: pathlib.Path) -> dict[str, str]:
@@ -386,13 +436,12 @@ def generate(symbols: dict[str, tuple[str, object]], outdir: pathlib.Path) -> di
     return {
         "rtconfig.h": render_header("rtconfig.h", "RT-Thread kernel configuration",
                                     symbols, "RT_"),
-        "board_config.h": render_header("board_config.h", "Board pin and clock configuration",
-                                        symbols, "BOARD_"),
+        # 板级接线在 board_config.h 手写；这里只输出 Kconfig 策略。
+        "board_policy.h": render_board_policy(symbols),
         "fw_config.h": render_header("fw_config.h", "Framework component configuration",
                                      symbols, "FW_"),
         "app_config.h": render_header("app_config.h", "Application configuration",
                                       symbols, "APP_"),
-        "board_memory.ld": render_memory_ld(symbols),
         "fw_config.cmake": render_cmake(symbols),
         "config_summary.txt": render_summary(target, symbols),
     }
@@ -421,6 +470,9 @@ def main(argv: list[str]) -> int:
     symbols = collect_symbols(kconf)
 
     errors = validate(symbols)
+    for name in unknown_config_keys(config_path, kconf):
+        errors.append(f"unknown/removed .config key CONFIG_{name}; clean this profile")
+
     if errors:
         for error in errors:
             print(f"genconfig: {error}", file=sys.stderr)
@@ -428,7 +480,7 @@ def main(argv: list[str]) -> int:
 
     outputs = generate(symbols, outdir)
 
-    # --check：逐个比较内容；任何缺失/不一致都视为 STALE。
+    # --check：逐个比较内容；旧生成物残留也视为 STALE。
     if args.check:
         stale = []
         for name, content in outputs.items():
@@ -439,14 +491,25 @@ def main(argv: list[str]) -> int:
                 current = None
             if current != content:
                 stale.append(name)
+        for name in OBSOLETE_OUTPUTS:
+            if (outdir / name).exists():
+                stale.append(name + " (obsolete)")
         if stale:
             print("genconfig: generated files are stale: " + ", ".join(stale),
                   file=sys.stderr)
             return 1
         return 0
 
-    # 正常写入：只写变化的文件，减少 CMake 重新配置/重编译。
+    # 正常写入：先清理旧生成物，再只写变化的文件。
     outdir.mkdir(parents=True, exist_ok=True)
+    removed = []
+    for name in OBSOLETE_OUTPUTS:
+        path = outdir / name
+        if path.exists():
+            path.unlink()
+            removed.append(name)
+    if removed:
+        print("genconfig: removed obsolete " + ", ".join(removed))
     changed = []
     for name, content in outputs.items():
         if write_if_changed(outdir / name, content):

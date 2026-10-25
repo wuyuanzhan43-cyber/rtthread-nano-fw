@@ -5,10 +5,11 @@
     python src/tests/hil/test_protocol.py --port COM7
     python src/tests/hil/test_protocol.py --port /dev/ttyUSB0 --baud 115200
     python src/tests/hil/test_protocol.py --port COM7 --stats
+    python src/tests/hil/test_protocol.py --port COM7 --stats --tasks --stress
 
 前提：
     - 安装 pyserial；
-    - 板子运行 protocol 模式固件（APP_UART_HELLO_TEST=0）；
+    - 板子运行默认固件（或 profiles/f407ve-dma 验证 DMA/EXTI）；
     - USB-UART 适配器的 TX/RX/GND 与板子正确交叉连接；
     - 波特率与固件 BOARD_UART_BAUD 一致（默认 115200）。
 
@@ -188,6 +189,8 @@ def main():
                         help="also test CMD_STATS (requires current firmware)")
     parser.add_argument("--tasks", action="store_true",
                         help="also test task summary/detail/control")
+    parser.add_argument("--stress", action="store_true",
+                        help="send many PING frames to exercise UART DMA/ring")
     args = parser.parse_args()
 
     # timeout=0.1 让 read(1) 不会无限阻塞；整体超时由 read_frame 控制。
@@ -279,17 +282,37 @@ def main():
             busy = int.from_bytes(payload[7:9], "little")
             idle = int.from_bytes(payload[9:11], "little")
             other = int.from_bytes(payload[11:13], "little")
-            expect(total >= 2, "expected at least main+rpc tasks, got %u" % total)
+            expect(total >= 3, "expected main+rpc+worker tasks, got %u" % total)
             expect(current < total, "current_index %u out of %u" % (current, total))
 
-            detail = None
-            for index in range(total):
-                port.write(encode(CMD_TASK_DETAIL, 12 + index, bytes([index])))
-                item = wait_reply(reader, CMD_TASK_DETAIL, 12 + index)
+            # 这部分使用独立序号，避免和上面的固定序号冲突。
+            next_seq = [100]
+
+            def task_detail(index):
+                next_seq[0] += 1
+                seq = next_seq[0]
+                port.write(encode(CMD_TASK_DETAIL, seq, bytes([index])))
+                item = wait_reply(reader, CMD_TASK_DETAIL, seq)
                 expect(len(item) == TASK_DETAIL_LEN and item[0] == 0,
                        "bad TASK_DETAIL[%u]: %r" % (index, item))
+                return item
+
+            def task_control(index, action, value=0):
+                next_seq[0] += 1
+                seq = next_seq[0]
+                port.write(encode(CMD_TASK_CONTROL, seq,
+                                  bytes([index, action, value])))
+                return wait_reply(reader, CMD_TASK_CONTROL, seq)
+
+            detail = None
+            worker_index = None
+            for index in range(total):
+                item = task_detail(index)
                 if index == current:
                     detail = item
+                name = item[6:14].split(b"\x00", 1)[0]
+                if name == b"worker":
+                    worker_index = index
 
             port.write(encode(CMD_TASK_DETAIL, 12 + total, b"\xFF"))
             bad = wait_reply(reader, CMD_TASK_DETAIL, 12 + total)
@@ -306,8 +329,70 @@ def main():
                               bytes([current, TASK_SET_PRIORITY, same_priority])))
             controlled = wait_reply(reader, CMD_TASK_CONTROL, 14 + total)
             expect(controlled == b"\x00", "set-priority should succeed: %r" % controlled)
-            print("   ok (total=%u current=%u busy=%u idle=%u other=%u)"
-                  % (total, current, busy, idle, other))
+
+            # 对 worker 做一次真实的 suspend/resume，验证协作式控制链路。
+            # RT-Thread 的 SUSPEND 状态同时表示“用户挂起”和“sleep/IPC 等待”，
+            # 因此不能用 state 判断；用 heartbeat_count 冻结/恢复来判定。
+            expect(worker_index is not None,
+                   "worker task not found; rebuild firmware with app worker")
+            expect(task_control(worker_index, TASK_SUSPEND) == b"\x00",
+                   "suspend worker rejected")
+
+            # 先等待两次相邻采样计数相同（说明 pending 已被处理并真正停住）。
+            deadline = time.monotonic() + 2.0
+            previous = None
+            frozen = None
+            while time.monotonic() < deadline:
+                item = task_detail(worker_index)
+                count = int.from_bytes(item[26:30], "little")
+                if previous is not None and count == previous:
+                    frozen = count
+                    break
+                previous = count
+                time.sleep(0.4)  # 大于 worker 的 100ms 周期
+            expect(frozen is not None, "worker heartbeat never froze; suspend failed")
+
+            time.sleep(1.2)
+            during = task_detail(worker_index)
+            count_during = int.from_bytes(during[26:30], "little")
+            expect(count_during == frozen,
+                   "worker heartbeat advanced while suspended: %u -> %u"
+                   % (frozen, count_during))
+            expect(during[3] != 2, "suspended worker became LOST: %r" % (during,))
+
+            # user_suspended 与真正 suspend 之间有极小窗口，EBUSY 时重试。
+            response = None
+            for _ in range(10):
+                response = task_control(worker_index, TASK_RESUME)
+                if response == b"\x00":
+                    break
+                expect(response == b"\x06", "unexpected resume status: %r" % response)
+                time.sleep(0.05)
+            expect(response == b"\x00", "resume worker failed: %r" % response)
+
+            time.sleep(0.5)
+            after = task_detail(worker_index)
+            count_after = int.from_bytes(after[26:30], "little")
+            expect(count_after > count_during,
+                   "worker heartbeat not resumed: %u -> %u"
+                   % (count_during, count_after))
+            expect(after[3] != 2, "worker became LOST after resume: %r" % (after,))
+
+            print("   ok (total=%u current=%u worker=%u busy=%u idle=%u other=%u)"
+                  % (total, current, worker_index, busy, idle, other))
+
+        # 10. 可选压力测试：连续 PING 验证 RX/TX ring 与 DMA 路径。
+        #     序号只用 1 字节，200..299 会自然回绕；脚本按回绕后的值匹配。
+        if args.stress:
+            print("10. PING stress (100 frames)")
+            seq_base = 200
+            for index in range(100):
+                seq_value = (seq_base + index) & 0xFF
+                port.write(encode(CMD_PING, seq_value))
+                payload = wait_reply(reader, CMD_PING, seq_value)
+                expect(payload[:1] == b"\x00" and payload[1:] == b"PONG",
+                       "stress PING[%u] failed: %r" % (index, payload))
+            print("   ok (100/100)")
 
     print("PASS HIL protocol smoke test")
     return 0

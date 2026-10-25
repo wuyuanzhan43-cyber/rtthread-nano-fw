@@ -57,6 +57,22 @@ static void serial_unlock(fw_dev_t *dev, int level)
 }
 
 /*
+ * 清缓冲前的硬件侧处理。
+ *
+ * RX：类层只需要在锁内重置 ring，DMA 可以继续运行，因此这里不做事。
+ * TX：如果驱动正在用 DMA 发送 staging 块，必须 abort，否则清空 wr_fifo
+ *     后 DMA 仍会把旧数据发出去，ring 与硬件状态会不一致。
+ *
+ * 驱动没有实现 flush 时按“无硬件在途状态”处理，保持 Host 假设备兼容。
+ */
+static int serial_flush(fw_dev_t *dev, bool rx)
+{
+    const fw_serial_ops_t *ops = serial_ops(dev);
+    if (!rx && ops != NULL && ops->flush != NULL) return ops->flush(dev, false);
+    return FW_OK;
+}
+
+/*
  * 打开串口。
  *
  * 行为：
@@ -96,8 +112,11 @@ static fw_status_t serial_open(fw_dev_t *dev)
 static fw_status_t serial_close(fw_dev_t *dev)
 {
     fw_serial_t *serial = FW_CONTAINER_OF(dev, fw_serial_t, dev);
-    int level = serial_lock(dev);
+    int level;
 
+    /* 先让驱动停止可能在途的 TX DMA，再清 ring。 */
+    (void)serial_flush(dev, false);
+    level = serial_lock(dev);
     fw_ring_clear(&serial->rd_fifo);
     fw_ring_clear(&serial->wr_fifo);
     serial->error = FW_OK;
@@ -260,7 +279,10 @@ static int serial_ioctl(fw_dev_t *dev, int off, int cmd, void *args)
         return FW_OK;
     }
     case FW_CTL_SERIAL_CLR_WR_BUF: {
-        int level = serial_lock(dev);
+        int level;
+        /* 先 abort TX DMA，避免硬件继续发送已经被清掉的数据。 */
+        (void)serial_flush(dev, false);
+        level = serial_lock(dev);
         fw_ring_clear(&serial->wr_fifo);
         serial_unlock(dev, level);
         return FW_OK;
@@ -375,10 +397,16 @@ fw_status_t fw_serial_register(fw_serial_t *serial, const char *name,
                                const fw_serial_config_t *config)
 {
     fw_status_t result;
-    if (serial == NULL || name == NULL || drv == NULL ||
+    if (serial == NULL || name == NULL || drv == NULL || drv->ops == NULL ||
         rd_storage == NULL || wr_storage == NULL ||
         rd_size == 0U || wr_size == 0U) return FW_EINVAL;
     if (drv->type != FW_DEV_TYPE_SERIAL) return FW_EINVAL;
+
+    /* 先初始化 ring：失败时设备尚未进入注册表，不会留下半注册对象。 */
+    if (fw_ring_init(&serial->rd_fifo, rd_storage, rd_size) != FW_OK ||
+        fw_ring_init(&serial->wr_fifo, wr_storage, wr_size) != FW_OK) {
+        return FW_EINVAL;
+    }
 
     result = fw_dev_register(&serial->dev, name, FW_DEV_TYPE_SERIAL, drv);
     if (result != FW_OK) return result;
@@ -386,10 +414,6 @@ fw_status_t fw_serial_register(fw_serial_t *serial, const char *name,
     serial->dev.ops = &serial_dev_ops;
     serial->config = config != NULL ? *config : default_config;
     serial->error = FW_OK;
-    if (fw_ring_init(&serial->rd_fifo, rd_storage, rd_size) != FW_OK ||
-        fw_ring_init(&serial->wr_fifo, wr_storage, wr_size) != FW_OK) {
-        return FW_EINVAL;
-    }
     return FW_OK;
 }
 
@@ -406,6 +430,78 @@ int fw_serial_ioctl_config(fw_dev_t *dev, const fw_serial_config_t *config)
 {
     if (config == NULL) return FW_EINVAL;
     return fw_dev_ioctl(dev, 0, FW_CTL_SERIAL_SET_CONFIG, (void *)config);
+}
+
+/*
+ * DMA RX 完成块写入类级 ring。
+ *
+ * 背景：
+ *   DMA 驱动通常用“双缓冲/循环 DMA”把串口数据搬进一块静态数组；
+ *   半传输/全传输中断只能告诉驱动“某一块已经完整”，并不知道 ring 的
+ *   head/tail/count。把 ring 的所有权留在 serial 类，可以让 DMA 路径和
+ *   原来的 RXNE 路径共用同一套读接口和溢出语义。
+ *
+ * 并发：
+ *   函数内部使用 serial_lock（STM32 驱动是 PRIMASK 关中断），
+ *   因此任务侧 read 与 DMA 完成中断不会同时修改 ring。
+ *
+ * 溢出：
+ *   ring 满时 fw_ring_write 返回短写；这里把 error 置为 FW_EOVERFLOW，
+ *   serial_read 下一次读取会先上报错误并清空 RX ring，与 ISR 路径一致。
+ */
+size_t fw_serial_rx_push(fw_serial_t *serial, const uint8_t *data,
+                         size_t length)
+{
+    int level;
+    size_t written;
+
+    if (serial == NULL || (data == NULL && length != 0U)) return 0U;
+    level = serial_lock(&serial->dev);
+    written = fw_ring_write(&serial->rd_fifo, data, length);
+    if (written != length) serial->error = FW_EOVERFLOW;
+    serial_unlock(&serial->dev, level);
+    return written;
+}
+
+/*
+ * 查看 TX ring 中最早的一块，但不消费。
+ *
+ * DMA TX 的典型流程：
+ *   1. peek 到 staging 缓冲；
+ *   2. 启动 DMA，让硬件读 staging；
+ *   3. 完成中断里再 consume 对应长度。
+ * 如果第 1 步就 read 消费，DMA 传输期间生产者继续写 ring，ring 可能
+ * 回绕覆盖尚未发送的数据；peek 保证 tail 不动，数据稳定。
+ */
+size_t fw_serial_tx_peek(fw_serial_t *serial, uint8_t *dst, size_t capacity)
+{
+    int level;
+    size_t count;
+
+    if (serial == NULL || dst == NULL || capacity == 0U) return 0U;
+    level = serial_lock(&serial->dev);
+    count = fw_ring_peek(&serial->wr_fifo, dst, capacity);
+    serial_unlock(&serial->dev, level);
+    return count;
+}
+
+/*
+ * 确认 staging 块已经发送完成后，消费 ring 中对应字节。
+ *
+ * 只移动 tail/count，不拷贝数据；length 由调用者保存的 tx_stage_len 提供。
+ * 如果 ring 在 DMA 期间被 CLEAR 等操作改过，discard 会返回小于 length 的
+ * 数量；驱动仍然把硬件侧视为已完成，避免重复发送。
+ */
+size_t fw_serial_tx_consume(fw_serial_t *serial, size_t length)
+{
+    int level;
+    size_t discarded;
+
+    if (serial == NULL || length == 0U) return 0U;
+    level = serial_lock(&serial->dev);
+    discarded = fw_ring_discard(&serial->wr_fifo, length);
+    serial_unlock(&serial->dev, level);
+    return discarded;
 }
 
 /*

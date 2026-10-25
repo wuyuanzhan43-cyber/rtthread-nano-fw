@@ -44,7 +44,8 @@ typedef enum {
     FW_ENOTSUP = -7,    /* 当前实现不支持该操作 */
     FW_ENODEV = -8,     /* 注册表中不存在该设备 */
     FW_EEXIST = -9,     /* 设备名重复注册 */
-    FW_EBUSY = -10      /* 设备忙或注册表已封存 */
+    FW_EBUSY = -10,     /* 设备忙或注册表已封存 */
+    FW_ENODATA = -11    /* 参数/持久化存储中还没有有效数据 */
 } fw_status_t;
 
 /*

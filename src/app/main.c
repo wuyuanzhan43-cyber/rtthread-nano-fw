@@ -27,8 +27,11 @@
 #include "app/boot.h"
 #include "app/rpc.h"
 #include "app/tasks.h"
+#include "fw/log.h"
 #include "fw/rtthread_clock.h"
+#include "fw/rtthread_log.h"
 #include "fw/status.h"
+#include "fw/task.h"
 
 /*
  * 程序入口。
@@ -41,15 +44,18 @@ int main(void)
     app_rpc_config_t config;
     fw_status_t status;
 
+    /* 绑定 fw_log sink；之后统一走 [级别] 前缀格式。 */
+    fw_rtthread_log_bind();
+
     /* 启动横幅：board 名称、版本和上次复位原因。 */
-    rt_kprintf("v2 framework: %s %s, reset=%s\n",
-               board_name(), board_version(),
-               board_reset_cause_name(board_reset_cause()));
+    FW_LOGI("main", "v2 framework: %s %s, reset=%s",
+            board_name(), board_version(),
+            board_reset_cause_name(board_reset_cause()));
 
     /*
      * 组装应用配置。
      *
-     * board_console_dev() 返回当前 BOARD_CONSOLE_UART_NUM 对应的 serialN；
+     * board_console_dev() 返回 BOARD_CONSOLE_UART 对应的 serialN；
      * board_pin_dev() 返回唯一的 "pin" 设备；
      * board_led_enabled() 为 false 时应用不绑定 LED 输出；
      * fw_rtthread_clock() 把 rt_tick_get 包装成与 RTOS 无关的毫秒时钟。
@@ -64,7 +70,7 @@ int main(void)
 
     /* 控制台串口是必需的：没有它就无法输出诊断信息。 */
     if (config.serial == NULL) {
-        rt_kprintf("device lookup failed: console serial\n");
+        FW_LOGE("main", "device lookup failed: console serial\n");
         for (;;) rt_thread_mdelay(1000U);
     }
 
@@ -78,7 +84,7 @@ int main(void)
      */
     status = fw_dev_open(config.serial, FW_OFLAG_RDWR);
     if (status != FW_OK) {
-        rt_kprintf("console open failed: %s\n", fw_status_name(status));
+        FW_LOGE("main", "console open failed: %s\n", fw_status_name(status));
         for (;;) rt_thread_mdelay(1000U);
     }
 
@@ -91,7 +97,7 @@ int main(void)
     if (config.pin != NULL) {
         status = fw_dev_open(config.pin, FW_OFLAG_RDWR);
         if (status != FW_OK) {
-            rt_kprintf("pin open failed: %s\n", fw_status_name(status));
+            FW_LOGE("main", "pin open failed: %s\n", fw_status_name(status));
             for (;;) rt_thread_mdelay(1000U);
         }
     }
@@ -104,7 +110,7 @@ int main(void)
      */
     status = board_serial_start_all();
     if (status != FW_OK) {
-        rt_kprintf("serial start failed: %s\n", fw_status_name(status));
+        FW_LOGE("main", "serial start failed: %s\n", fw_status_name(status));
         for (;;) rt_thread_mdelay(1000U);
     }
 
@@ -117,7 +123,7 @@ int main(void)
      */
     status = app_boot_display(board_lcd());
     if (status != FW_OK && status != FW_ENOTSUP) {
-        rt_kprintf("lcd init failed: %s\n", fw_status_name(status));
+        FW_LOGE("main", "lcd init failed: %s\n", fw_status_name(status));
     }
 
     /*
@@ -128,7 +134,7 @@ int main(void)
      */
     status = app_tasks_init();
     if (status != FW_OK) {
-        rt_kprintf("task init failed: %s\n", fw_status_name(status));
+        FW_LOGE("main", "task init failed: %s\n", fw_status_name(status));
         for (;;) rt_thread_mdelay(1000U);
     }
 
@@ -148,28 +154,47 @@ int main(void)
                                            APP_RPC_REPORT_PERIOD_MS);
     }
     if (status != FW_OK) {
-        rt_kprintf("rpc init failed: %s\n", fw_status_name(status));
+        FW_LOGE("main", "rpc init failed: %s\n", fw_status_name(status));
         for (;;) rt_thread_mdelay(1000U);
     }
 
     /* 启动 rpc 任务；此后串口由它独占。 */
     status = app_tasks_start();
     if (status != FW_OK) {
-        rt_kprintf("rpc task start failed: %s\n", fw_status_name(status));
+        FW_LOGE("main", "rpc task start failed: %s\n", fw_status_name(status));
         for (;;) rt_thread_mdelay(1000U);
+    }
+
+    /*
+     * 所有设备和任务就绪后才启动 IWDG。
+     *
+     * 未启用时 board_watchdog_start 返回 FW_OK；启用后不可停止，
+     * 必须由下面的监督循环按任务健康度喂狗。
+     */
+    status = board_watchdog_start();
+    if (status != FW_OK) {
+        FW_LOGE("main", "watchdog start failed: %s\n", fw_status_name(status));
+    } else if (board_watchdog_enabled()) {
+        FW_LOGI("main", "watchdog: enabled\n");
     }
 
     /*
      * 监督循环。
      *
-     * 每轮刷新任务健康度（栈/状态/心跳/CPU），然后睡到下一次
-     * refresh 或心跳 warn/lost 截止时间。main 心跳关闭，因此不会
-     * 因为自身休眠而被判 lost。
+     * 每轮刷新任务健康度（栈/状态/心跳/CPU），只有没有任务 LOST 时才
+     * 喂狗；某个任务失联或 main 自身卡死都会让 IWDG 复位系统。
+     * main 心跳关闭，因此不会因为自身休眠而被判 lost。
      */
     for (;;) {
+        fw_task_summary_t summary;
         uint32_t wait;
 
         fw_task_refresh(app_tasks_manager());
+        if (fw_task_summary(app_tasks_manager(), &summary) == FW_OK &&
+            summary.lost == 0U) {
+            board_watchdog_feed();
+        }
+
         wait = fw_task_next_wait_ms(app_tasks_manager());
         if (wait == 0U) wait = 1U;
         rt_thread_mdelay((rt_int32_t)wait);

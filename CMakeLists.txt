@@ -56,6 +56,8 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${FW_ROOT}/tools/fwconfig.py"
     "${FW_ROOT}/tools/genconfig.py"
     "${FW_ROOT}/project/sources.json"
+    "${FW_ROOT}/src/platform/board/stm32f407ve/board_config.h"
+    "${FW_ROOT}/src/platform/board/stm32f407ve/link.lds"
     "${FW_ROOT}/Kconfig"
     "${FW_ROOT}/Kconfig.kernel"
     "${FW_ROOT}/Kconfig.framework"
@@ -180,10 +182,17 @@ if(CONFIG_FW_PLATFORM_HOST)
         add_test(NAME v2_hygiene_check
                  COMMAND "${Python3_EXECUTABLE}" "${FW_ROOT}/tools/fwconfig.py"
                          check-hygiene)
+        # 生成器/静态板级数据单元测试（board_config.h + link.lds 一致性）。
+        add_test(NAME v2_tools_tests
+                 COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+                         -s "${FW_ROOT}/tools/tests" -p "test_*.py")
         # Keil 工程是否与 manifest 同步。
         add_test(NAME v2_keil_project_check
                  COMMAND "${Python3_EXECUTABLE}" "${FW_ROOT}/tools/fwconfig.py"
                          gen-keil --profile f407ve --check)
+        add_test(NAME v2_keil_project_hse_check
+                 COMMAND "${Python3_EXECUTABLE}" "${FW_ROOT}/tools/fwconfig.py"
+                         gen-keil --profile f407ve-hse --check)
     endif()
 elseif(CONFIG_FW_PLATFORM_STM32F407VE)
     # 固件必须使用交叉工具链，防止误用主机 gcc 生成不可运行的 elf。

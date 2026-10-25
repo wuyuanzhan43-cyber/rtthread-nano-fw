@@ -357,7 +357,7 @@ td code { white-space: nowrap; }
   </div>
   <div class="stats">
     <div class="stat"><div class="stat__value">≈4.6k</div><div class="stat__label">自研代码行数</div></div>
-    <div class="stat"><div class="stat__value">4</div><div class="stat__label">设备类</div></div>
+    <div class="stat"><div class="stat__value">7</div><div class="stat__label">设备类</div></div>
     <div class="stat"><div class="stat__value">3</div><div class="stat__label">配置 profile</div></div>
     <div class="stat"><div class="stat__value">2</div><div class="stat__label">构建工具链</div></div>
   </div>
@@ -380,7 +380,7 @@ td code { white-space: nowrap; }
     </article>
     <article class="card">
       <h4>Device</h4>
-      <p>自建设备核心保留 mr-library 的路径寻址与 <code>open/close/read/write/ioctl/isr</code> 语义，用一个静态注册表和四个设备类覆盖 pin、串口、SPI、显示。</p>
+      <p>自建设备核心保留 mr-library 的路径寻址与 <code>open/close/read/write/ioctl/isr</code> 语义，用一个静态注册表和七个设备类覆盖 pin、串口、SPI、I2C、ADC、PWM、显示。</p>
     </article>
     <article class="card">
       <h4>Board</h4>
@@ -432,7 +432,7 @@ td code { white-space: nowrap; }
         <tr><td>板级可裁剪</td><td>逐实例 <code>FW_USING_UARTn</code> / <code>FW_USING_SPIn</code></td><td><code>src/platform/stm32f407/Kconfig</code></td></tr>
         <tr><td>无动态分配</td><td>静态注册表、静态 ring、静态事件对象</td><td><code>RT_USING_HEAP=n</code>，map/nm 无 malloc</td></tr>
         <tr><td>双工具链一致</td><td>单一 <code>project/sources.json</code> 驱动 CMake 与 Keil</td><td><code>check-manifest</code>、<code>gen-keil --check</code></td></tr>
-        <tr><td>逻辑可在 PC 验证</td><td>Host 假设备 + CTest，不依赖 RTOS/HAL</td><td><code>src/tests/host/</code>，6/6 通过</td></tr>
+        <tr><td>逻辑可在 PC 验证</td><td>Host 假设备 + CTest，不依赖 RTOS/HAL</td><td><code>src/tests/host/</code>，8/8 通过</td></tr>
       </tbody>
     </table>
   </div>
@@ -441,7 +441,7 @@ td code { white-space: nowrap; }
   <ul>
     <li><strong>不引入完整 RT-Thread：</strong>不使用 device framework、FinSH/msh、ulog、SAL；Nano 只作为调度和 IPC 内核。</li>
     <li><strong>不 vendor 整个 mr-library：</strong>它的 ring/pin IRQ 依赖动态分配，配置也会变成第二配置源；本项目只借鉴语义和板级表结构。</li>
-    <li><strong>不做 UART DMA：</strong>当前是 IT 路径，<code>BOARD_UART_DMA</code> 必须为 n，生成阶段会拒绝打开。</li>
+    <li><strong>UART/SPI DMA 与 EXTI：</strong>框架已实现，默认关闭；<code>f407ve-dma</code> 打开 UART1 DMA、SPI1 TX DMA 与 pin EXTI，待上板验证。</li>
     <li><strong>不适配 AC6：</strong>Keil 工程固定 <code>uAC6=0</code>、<code>uC99=1</code>，使用 ARMCC 5.06。</li>
     <li><strong>不宣称硬件已验证：</strong>GCC/Keil 构建和 Host 测试已通过；真实烧录与 HIL 需要板卡，文档中明确标注边界。</li>
   </ul>
@@ -865,15 +865,53 @@ static void serial_unlock(fw_dev_t *dev, int level)
   </div>
 
   <h3>SPI 类</h3>
-  <p>SPI 是同步总线，没有 ring 和中断事件。类层保存配置并转发同步传输；驱动用 HAL 的 Transmit / Receive / TransmitReceive 完成一次事务。片选由具体外设通过 pin 设备控制，SPI 类不涉及。</p>
+  <p>SPI 是同步总线，没有 ring 和中断事件。类层保存配置并转发同步/异步传输；驱动可选择 HAL 轮询或 DMA。片选由具体外设通过 pin 设备控制，SPI 类不涉及。</p>
+  <p>类层额外提供 <code>fw_spi_transfer_async/wait/abort</code>：async 只启动硬件并置 busy，wait 才阻塞；wait 超时由类层 abort，避免调用者在总线仍忙时释放 CS。信号量和 HAL 回调只存在于 <code>drv_spi.c</code>，framework/core 仍然不包含 RT-Thread 头文件。</p>
 
   <figure class="code">
     <div class="code__bar"><span class="code__path">src/framework/core/fw_spi.c · fw_spi_transfer</span><button class="copy" type="button">复制</button></div>
     <pre><code>const fw_spi_ops_t *ops = spi_ops(dev);
 if (ops == NULL || ops-&gt;transfer == NULL) return FW_ENOTSUP;
+if (spi-&gt;busy) return FW_EBUSY;
 if (length == 0U) return 0;
+if (length &gt; FW_SPI_MAX_TRANSFER) return FW_EINVAL;
 if (tx == NULL &amp;&amp; rx == NULL) return FW_EINVAL;
 return ops-&gt;transfer(dev, tx, rx, length, timeout_ms);</code></pre>
+  </figure>
+
+  <figure class="code">
+    <div class="code__bar"><span class="code__path">drv_spi.c · 同步路径的 DMA 选择</span><button class="copy" type="button">复制</button></div>
+    <pre><code>if (spi_dma_any(spi) &amp;&amp; length &gt;= DRV_SPI_DMA_MIN_BYTES) {
+    int started = spi_transfer_async(dev, tx, rx, length);
+    int finished = spi_transfer_wait(dev, timeout_ms == 0U ? 1U : timeout_ms);
+    if (finished == FW_OK) return (int)length;
+    if (finished == FW_ETIMEOUT) {
+        return spi_transfer_abort(dev) == FW_OK ? FW_ETIMEOUT : FW_EIO;
+    }
+    return finished;
+}</code></pre>
+  </figure>
+
+  <h3>I2C / ADC / PWM 类</h3>
+  <p>这三个类首版全部是阻塞/轮询实现，不引入 ring、中断或 DMA。I2C 的 <code>off</code> 是 7 位从机地址，寄存器读使用 <code>mem_read</code>（HAL 内部 repeated start）；ADC 的 <code>off</code> 是通道号，一个设备覆盖所有已接线通道；PWM 的 <code>off</code> 是通道 0..3，占空比使用千分比，start/stop 控制整个定时器。</p>
+
+  <figure class="code">
+    <div class="code__bar"><span class="code__path">src/platform/stm32f407/drv_adc.c · 单次转换</span><button class="copy" type="button">复制</button></div>
+    <pre><code>conf.Channel = channel_value((uint8_t)channel, &amp;ok);
+conf.Rank = 1U;
+conf.SamplingTime = sample;
+HAL_ADC_ConfigChannel(&amp;adc-&gt;hal, &amp;conf);
+HAL_ADC_Start(&amp;adc-&gt;hal);
+HAL_ADC_PollForConversion(&amp;adc-&gt;hal, timeout);
+*raw = (uint16_t)HAL_ADC_GetValue(&amp;adc-&gt;hal);</code></pre>
+  </figure>
+
+  <figure class="code">
+    <div class="code__bar"><span class="code__path">src/platform/stm32f407/drv_pwm.c · PSC/ARR</span><button class="copy" type="button">复制</button></div>
+    <pre><code>ticks = tim_clk / freq;
+psc = ceil(ticks / 65536) - 1;
+arr = (tim_clk / ((psc + 1) * freq)) - 1;
+/* CCR = (ARR+1)*permille/1000；ARR=65535 时 100% 钳位到 ARR */</code></pre>
   </figure>
 
   <h3>display 类</h3>
@@ -930,7 +968,7 @@ while (remaining != 0U &amp;&amp; result == FW_OK) {
   pin(CS=0) → pin(DC=0) → spi(命令) → pin(DC=1)
   → spi(像素流) → pin(CS=1)</div>
 
-  <p>面板驱动不直接操作 HAL；它通过 <code>fw_spi_transfer</code> 和 <code>fw_pin_write</code> 工作，因此可以在 Host 上用假设备验证裁剪/分块逻辑。</p>
+  <p>面板驱动不直接操作 HAL；它通过 <code>fw_spi_transfer</code> 和 <code>fw_pin_write</code> 工作，因此可以在 Host 上用假设备验证裁剪/分块逻辑。SPI DMA 打开后，1 字节命令仍轮询，64 字节像素块自动走 DMA；LCD 代码不需要改。</p>
 
   <h3>启动画面</h3>
   <p><code>app_boot_display()</code>（位于 <code>src/app/boot/app_boot.c</code>）先调用 <code>fw_display_setup()</code> 执行面板初始化，再按 <code>APP_BOOT_MODE</code> 选择四色横条、头像图片或纯白诊断。头像是一张 128×160 RGB565 常量表，占 40KB Flash；选择其他模式时可由链接器回收。</p>
@@ -971,7 +1009,14 @@ while (remaining != 0U &amp;&amp; result == FW_OK) {
   <h3>挂起与恢复</h3>
   <p>RT-Thread 的 <code>rt_thread_suspend()</code> 只接受 READY 线程，因此 suspend 只置
   <code>suspend_pending</code>，目标任务在下一次 heartbeat 时自行挂起；resume 只接受
-  <code>user_suspended</code> 的任务。main 不可控，异常不自动重启。</p>
+  <code>user_suspended</code> 的任务。main 不可控，异常不自动重启任务。</p>
+
+  <h3>故障、看门狗与日志</h3>
+  <p>HardFault 由 RT-Thread 的异常入口接管，再调用 platform 的异常钩子；MemManage/BusFault/UsageFault 由 platform 强符号入口处理。两者都保存栈帧和 CFSR/HFSR/MMFAR/BFAR，并通过 panic 直写控制台输出，避免依赖 ring 或调度器。</p>
+  <p>IWDG 可选：main 在任务全部启动后开启，只在 <code>fw_task_summary().lost == 0</code> 时喂狗。任务失联或 main 卡死会触发复位；复位原因在下次启动横幅中打印。日志使用 <code>fw_log</code> 的分级宏，<code>FW_LOG_LEVEL</code> 决定编译期上限；每个设备另有累计 <code>error_count</code>。</p>
+
+  <h3>参数存储</h3>
+  <p><code>fw_param</code> 在板级 NVM 分区上维护两个 A/B 槽：槽头包含 magic/version/序号/长度/CRC32。save 先擦除非活动槽，再写槽头和数据，回读确认后切换；掉电写坏新槽时，下一次 init 会回退到旧槽。STM32 后端要求每个槽对应一个可独立擦除的扇区，当前板级使用尾部两个 128KB 扇区，代码区相应缩小到 256KB。</p>
 
   <h3>运行时查看</h3>
   <p><code>0x05</code> 返回总数、ok/warn/lost、worst/current 索引和 busy/idle/other；
@@ -1014,32 +1059,32 @@ while (remaining != 0U &amp;&amp; result == FW_OK) {
   <h3>逐实例生成：Kconfig 直接决定注册代码</h3>
   <figure class="code">
     <div class="code__bar"><span class="code__path">src/platform/stm32f407/drv_serial.c</span><button class="copy" type="button">复制</button></div>
-    <pre><code>#if defined(FW_USING_UART1) &amp;&amp; FW_USING_UART1
+    <pre><code><span class="c">/* drv_serial.c：按 Kconfig 保留静态槽位 */</span>
+#if defined(FW_USING_UART1) &amp;&amp; FW_USING_UART1
 static drv_serial_t serial1;
 #endif
-#if defined(FW_USING_UART2) &amp;&amp; FW_USING_UART2
-static drv_serial_t serial2;
-#endif
-#if defined(FW_USING_UART3) &amp;&amp; FW_USING_UART3
-static drv_serial_t serial3;
-#endif
 
-fw_status_t drv_serial_register_all(void)
+fw_status_t drv_serial_register_all(<span class="k">const</span> drv_serial_hw_t *hw, size_t count)
 {
-    fw_status_t result = FW_OK;
-#if defined(FW_USING_UART1) &amp;&amp; FW_USING_UART1
-    result = serial_init_instance(&amp;serial1, "serial1", 1,
-                                  BOARD_UART1_TX_PORT, BOARD_UART1_TX_PIN,
-                                  BOARD_UART1_RX_PORT, BOARD_UART1_RX_PIN,
-                                  BOARD_UART1_AF);
-    if (result != FW_OK) return result;
-#endif
-    /* UART2 / UART3 同理 */
-    return result;
+    <span class="k">for</span> (size_t i = 0U; i &lt; count; ++i) {
+        drv_serial_t *slot = serial_slot(hw[i].instance);
+        fw_status_t result = serial_init_instance(slot, <span class="s">"serialN"</span>, &amp;hw[i]);
+        <span class="k">if</span> (result != FW_OK) <span class="k">return</span> result;
+    }
+    <span class="k">return</span> FW_OK;
+}
+
+<span class="c">/* board.c：board_config.h 的 C 表 -> drv_serial_hw_t */</span>
+<span class="k">static</span> size_t build_serial_hw(<span class="k">void</span>)
+{
+    <span class="c">/* 跳过未启用的 FW_USING_UARTn，复制 tx/rx/af/baud/DMA route */</span>
+    hw-&gt;tx_port = src-&gt;tx.port;
+    hw-&gt;tx_pin  = src-&gt;tx.pin;
+    hw-&gt;tx_af   = src-&gt;af;
 }</code></pre>
   </figure>
 
-  <p>引脚和 AF 全部来自 <code>board_config.h</code>，所以“启用 UART2”不需要改 C 代码：在 menuconfig 中打开 <code>FW_USING_UART2</code>，再调好 <code>BOARD_UART2_*</code> 即可。</p>
+  <p>引脚和 AF 全部来自 <code>board_config.h</code> 的 C 表，所以“启用 UART2”不需要改 C 代码：在 menuconfig 中打开 <code>FW_USING_UART2</code>，确认 UART2 表的 TX/RX/AF 即可。</p>
 
   <h3>注册顺序</h3>
   <div class="flow">
@@ -1083,7 +1128,7 @@ fw_status_t drv_serial_register_all(void)
     <div class="flow__step"><div class="flow__n">1</div><div class="flow__body"><strong>Reset_Handler</strong><span>启动文件从 Flash 读取初始 MSP 和复位向量，初始化 .data/.bss。</span></div></div>
     <div class="flow__step"><div class="flow__n">2</div><div class="flow__body"><strong>SystemInit</strong><span>启动文件内的基础时钟设置；随后进入 RT-Thread 的 <code>entry</code>。</span></div></div>
     <div class="flow__step"><div class="flow__n">3</div><div class="flow__body"><strong>rtthread_startup</strong><span>初始化内核对象、调度器、timer，然后调用 <code>rt_hw_board_init()</code>。</span></div></div>
-    <div class="flow__step"><div class="flow__n">4</div><div class="flow__body"><strong>rt_hw_board_init</strong><span><code>stm32f407_boot_init(board_clock_config())</code>：HAL/时钟/SysTick/heap/复位原因；然后 <code>board_devices_init()</code>。</span></div></div>
+    <div class="flow__step"><div class="flow__n">4</div><div class="flow__body"><strong>rt_hw_board_init</strong><span><code>stm32f407_boot_init(&amp;s_clock)</code>：HAL/时钟/SysTick/heap/复位原因；然后 <code>board_devices_init()</code>。</span></div></div>
     <div class="flow__step"><div class="flow__n">5</div><div class="flow__body"><strong>board_devices_init</strong><span>先 <code>board_pins_validate()</code>，再注册 pin / serial / spi / lcd 并绑定控制台；UART 中断仍未打开。</span></div></div>
     <div class="flow__step"><div class="flow__n">6</div><div class="flow__body"><strong>main</strong><span>open 控制台 serial → <code>board_serial_start_all()</code> → LCD 初始化 → app_tasks_init/start → 健康监督循环；RPC 在独立 rpc 任务中运行。</span></div></div>
   </div>
@@ -1092,7 +1137,7 @@ fw_status_t drv_serial_register_all(void)
     <div class="code__bar"><span class="code__path">src/platform/board/stm32f407ve/board.c · rt_hw_board_init</span><button class="copy" type="button">复制</button></div>
     <pre><code>void rt_hw_board_init(void)
 {
-    if (stm32f407_boot_init(board_clock_config()) != FW_OK)
+    if (stm32f407_boot_init(&amp;s_clock) != FW_OK)
         stm32f407_panic(__FILE__, __LINE__);
     if (board_devices_init() != FW_OK)
         stm32f407_panic(__FILE__, __LINE__);
@@ -1134,7 +1179,7 @@ fw_status_t drv_serial_register_all(void)
     <div class="section__num">09</div>
     <div>
       <h2>配置系统：一棵树，三个 profile</h2>
-      <p class="section__kicker">.config 是唯一输入，generated/ 是唯一输出，CMake 与 Keil 都从这里取配置。</p>
+      <p class="section__kicker">.config 是构建策略的唯一输入；板级接线在 board_config.h 手写。CMake 与 Keil 都消费同一 profile。</p>
     </div>
   </div>
 
@@ -1145,14 +1190,14 @@ fw_status_t drv_serial_register_all(void)
 ├─ Kconfig.app                启动画面等应用层选项
 ├─ src/platform/stm32f407/Kconfig.drivers   FW_USING_UART1..3 / SPI1..3
 └─ src/platform/board/stm32f407ve/Kconfig.board
-   时钟 / 板卡信息 / 内存 / LED / console / UART/SPI/LCD 板级选项</div>
+   时钟源 / LED/LCD / 波特率 / IRQ / SPI/I2C/ADC/PWM 频率 / IWDG</div>
 
   <h3>profile 布局</h3>
   <div class="tree">profiles/
 ├─ host/
 │  ├─ defconfig          模板：Host 单元测试
 │  ├─ .config            当前值
-│  └─ generated/         rtconfig.h · board_config.h · fw_config.h · app_config.h ...
+│  └─ generated/         rtconfig.h · board_policy.h · fw_config.h · app_config.h ...
 ├─ f407ve/               默认 HSI 16MHz + UART1 + SPI1 + LCD
 └─ f407ve-hse/           HSE 8MHz -> 168MHz</div>
 
@@ -1162,10 +1207,9 @@ fw_status_t drv_serial_register_all(void)
       <thead><tr><th>文件</th><th>消费者</th><th>内容</th></tr></thead>
       <tbody>
         <tr><td><code>rtconfig.h</code></td><td>RT-Thread Nano</td><td>RT_* 内核参数；false 的布尔不定义</td></tr>
-        <tr><td><code>board_config.h</code></td><td>BSP / board</td><td>BOARD_* 时钟、引脚、LCD、控制台</td></tr>
+        <tr><td><code>board_policy.h</code></td><td>board</td><td>BOARD_* 时钟源、启用项、波特率、IRQ、频率</td></tr>
         <tr><td><code>fw_config.h</code></td><td>framework</td><td>FW_* 容量、实例开关、ring 大小</td></tr>
         <tr><td><code>app_config.h</code></td><td>app</td><td>APP_* 启动画面等应用层选项</td></tr>
-        <tr><td><code>board_memory.ld</code></td><td>GCC / Keil</td><td>Flash/RAM/CCM/最小栈，链接与 scatter 共用</td></tr>
         <tr><td><code>fw_config.cmake</code></td><td>CMake</td><td>CONFIG_* 变量，用于选择平台分支</td></tr>
         <tr><td><code>config_summary.txt</code></td><td>人</td><td>便于 diff / 审查的配置摘要</td></tr>
       </tbody>
@@ -1180,7 +1224,7 @@ fw_status_t drv_serial_register_all(void)
     <li>所有已启用外设之间不能有引脚冲突；</li>
     <li>控制台选择的 UART 必须已启用；</li>
     <li>LCD 使用的 SPI 必须已启用；</li>
-    <li><code>BOARD_UART_DMA</code> 当前必须为 n，否则直接报错而不是静默忽略。</li>
+    <li>DMA/EXTI 框架已实现，默认构建仍走 IT；验证用 <code>f407ve-dma</code> profile。</li>
   </ul>
 
   <figure class="code">
@@ -1201,7 +1245,7 @@ fw_status_t drv_serial_register_all(void)
         <tr><td><code>python tools/fwconfig.py check --all</code></td><td>只检查生成物是否最新</td></tr>
         <tr><td><code>python tools/fwconfig.py check-layout</code></td><td>拒绝旧版配置路径</td></tr>
         <tr><td><code>python tools/fwconfig.py check-manifest</code></td><td>校验 sources.json 路径与覆盖性</td></tr>
-        <tr><td><code>python tools/fwconfig.py gen-keil --profile f407ve</code></td><td>从 manifest 重新生成 uVision 工程</td></tr>
+        <tr><td><code>python tools/fwconfig.py gen-keil --profile f407ve</code></td><td>从 sources.json + board_config.h 重新生成 uVision 工程</td></tr>
       </tbody>
     </table>
   </div>
@@ -1280,7 +1324,7 @@ include_paths += list_value(manifest, "target_includes")
 include_string = ";".join(keil_path(item) for item in include_paths)</code></pre>
   </figure>
 
-  <p>生成目录必须排在最前：<code>rtconfig.h</code> 和 <code>board_config.h</code> 会被 vendor/chip 头文件按名字包含，搜索顺序不能变。</p>
+  <p>生成目录必须排在最前：<code>rtconfig.h</code> 和 <code>board_policy.h</code> 会被板级/平台头按名字包含，搜索顺序不能变；<code>board_config.h</code> 本身在板级目录。</p>
 
   <h3>常用命令</h3>
   <figure class="code">
@@ -1309,7 +1353,7 @@ python tools/fwconfig.py gen-keil --profile f407ve</code></pre>
         <tr><td><code>v2_config_layout_check</code></td><td>不存在旧版 configs/、keil/.config、per-build .config</td></tr>
         <tr><td><code>v2_manifest_check</code></td><td>manifest 文件存在、无重复、src 下 .c 全覆盖</td></tr>
         <tr><td><code>v2_hygiene_check</code></td><td>第一方同名文件、示例式命名/旧路径残留</td></tr>
-        <tr><td><code>v2_keil_project_check</code></td><td>生成的 uvprojx 与 manifest 同步</td></tr>
+        <tr><td><code>v2_keil_project_check</code></td><td>生成的 uvprojx 与 sources.json/board_config.h 同步</td></tr>
       </tbody>
     </table>
   </div>
@@ -1454,14 +1498,18 @@ python src/tests/hil/test_protocol.py --port COM7 --stats</code></pre>
         <tr><td>RTOS 解耦</td><td>lock/unlock、wait_rx、clock、delay 全部注入</td><td>多一层函数指针；core 可在 Host 测试</td></tr>
         <tr><td>配置</td><td>Kconfig + 生成头文件</td><td>需要运行生成器；换来单一配置源和 menuconfig</td></tr>
         <tr><td>Keil 工程</td><td>模板 + 生成，不手工维护</td><td>不能在 GUI 里永久改选项；换来与 CMake 一致</td></tr>
-        <tr><td>UART DMA</td><td>本轮不做，配置阶段拒绝打开</td><td>吞吐有限；避免半实现的 DMA 状态机</td></tr>
+        <tr><td>UART DMA/EXTI</td><td>框架已实现，默认关闭</td><td><code>f407ve-dma</code> 打开；时序需上板验证</td></tr>
+        <tr><td>SPI DMA/异步 API</td><td>类层 async/wait/abort + 驱动信号量</td><td>同步短传输仍轮询；SPI1 受 PA6 限制为 TX-only</td></tr>
+        <tr><td>I2C/ADC/PWM</td><td>阻塞主模式/单次采样/四路 PWM</td><td>实现简单、易测；无 DMA/IRQ，高吞吐场景后续再扩展</td></tr>
+        <tr><td>可靠性与诊断</td><td>Fault dump + 可选 IWDG + 分级日志 + error_count</td><td>增加约 5KB Flash；IWDG 需上板调超时，调试时需关闭</td></tr>
       </tbody>
     </table>
   </div>
 
   <h3>新增一个设备类</h3>
   <ol>
-    <li>在 <code>src/framework/include/fw/</code> 定义类型令牌、ops、设备结构体和公开 API；</li>
+    <li>在 <code>src/framework/include/fw/dev.h</code> 追加类型令牌，已有值保持不变；</li>
+    <li>在 <code>src/framework/include/fw/</code> 定义 ops、设备结构体和公开 API；</li>
     <li>在 <code>src/framework/core/</code> 实现类包装：只做参数校验、状态保存和 ops 转发，不包含 HAL；</li>
     <li>在 <code>src/platform/stm32f407/</code> 实现具体芯片 ops；</li>
     <li>在 <code>src/platform/board/</code> 或设备自己的注册函数中创建静态实例并注册；</li>
@@ -1477,11 +1525,11 @@ python src/tests/hil/test_protocol.py --port COM7 --stats</code></pre>
   <h3>只改 Kconfig 增加一个串口</h3>
   <ol>
     <li>menuconfig 打开 <code>FW_USING_UART2</code>；</li>
-    <li>确认 <code>BOARD_UART2_TX/RX_PORT/PIN/AF</code>；</li>
+    <li>确认 <code>board_config.h</code> 的 UART 表中 UART2 的 TX/RX/AF；</li>
     <li>运行 <code>python tools/fwconfig.py sync --profile f407ve</code>；</li>
     <li>重新生成 Keil 工程并构建。</li>
   </ol>
-  <p>不需要修改 <code>drv_serial.c</code>、<code>board_devices.c</code> 或 CMake/Keil 工程文件：实例、ring、中断函数都由 Kconfig 和生成的头文件决定。</p>
+  <p>不需要修改 <code>drv_serial.c</code> 或 CMake/Keil 工程文件：实例、ring、中断函数由 Kconfig 决定，引脚由 <code>board_config.h</code> 的 C 表提供。</p>
 
   <h3>注释策略</h3>
   <p>源码采用中文注释，文件头写明层级/职责/上下文/依赖；公共 API 说明参数、返回值和调用上下文；关键路径解释“为什么”而不是“做了什么”。自研 C/H 的注释密度约 40%，外部 vendor/third_party 保持上游风格，不做大面积改写。</p>
@@ -1498,21 +1546,22 @@ python src/tests/hil/test_protocol.py --port COM7 --stats</code></pre>
   </div>
 
   <div class="kpi">
-    <div class="kpi__item"><div class="kpi__v">6/6</div><div class="kpi__k">Host CTest</div></div>
+    <div class="kpi__item"><div class="kpi__v">8/8</div><div class="kpi__k">Host CTest</div></div>
     <div class="kpi__item"><div class="kpi__v">待复验</div><div class="kpi__k">Keil AC5（工程已重新生成）</div></div>
-    <div class="kpi__item"><div class="kpi__v">95,436 B</div><div class="kpi__k">F407 HSI Flash</div></div>
+    <div class="kpi__item"><div class="kpi__v">141,808 B</div><div class="kpi__k">F407 HSI Flash</div></div>
   </div>
 
   <div class="table-wrap">
     <table>
       <thead><tr><th>检查</th><th>结果</th><th>说明</th></tr></thead>
       <tbody>
-        <tr><td>Host 单元测试</td><td>6/6 通过</td><td>ring、协议、设备表、serial/pin/display、RPC、任务健康</td></tr>
-        <tr><td>F407 HSI（GCC 14）</td><td>Flash 95,436 B / RAM 14,896 B</td><td><code>cmake --preset f407-debug</code></td></tr>
-        <tr><td>F407 HSE（GCC 14）</td><td>Flash 95,436 B / RAM 14,896 B</td><td><code>cmake --preset f407-hse-debug</code></td></tr>
-        <tr><td>Keil AC5</td><td>待 UV4 复验</td><td>工程和 scatter 已由 manifest/board_config 重新生成</td></tr>
+        <tr><td>Host 单元测试</td><td>8/8 通过</td><td>ring、协议、设备表、serial/pin/display/i2c/adc/pwm、RPC、任务健康、日志、错误计数、板级 C 表</td></tr>
+        <tr><td>F407 HSI（GCC 14）</td><td>Flash 141,808 B / RAM 18,120 B</td><td><code>cmake --preset f407-debug</code></td></tr>
+        <tr><td>F407 HSE（GCC 14）</td><td>Flash 141,808 B / RAM 18,120 B</td><td><code>cmake --preset f407-hse-debug</code></td></tr>
+        <tr><td>Keil AC5</td><td>待 UV4 复验</td><td>工程和 scatter 已由 board_config.h/board_policy.h 重新生成</td></tr>
+        <tr><td>F407 DMA profile</td><td>Flash 150,224 B / RAM 18,400 B</td><td>UART/SPI DMA + EXTI + IWDG</td></tr>
         <tr><td>配置一致性</td><td>3 个 profile 全部 OK</td><td><code>fwconfig.py check --all</code></td></tr>
-        <tr><td>布局/manifest</td><td>OK（73 项）</td><td>无旧路径；src 下 .c 全部登记</td></tr>
+        <tr><td>布局/manifest</td><td>OK（94 项）</td><td>无旧路径；src 下 .c 全部登记</td></tr>
       </tbody>
     </table>
   </div>
@@ -1521,8 +1570,12 @@ python src/tests/hil/test_protocol.py --port COM7 --stats</code></pre>
   <ul>
     <li><strong>真实硬件烧录：</strong>需要 STM32F407VE 板卡和下载器；本文不声称上板通过。</li>
     <li><strong>串口 HIL：</strong>脚本已提供，但需要在板卡上运行固件并连接 USB-UART。</li>
-    <li><strong>LCD 实际显示：</strong>面板时序在代码层完成，偏移/颜色顺序可能需要按实际批次调整 <code>BOARD_LCD_*</code>。</li>
-    <li><strong>UART DMA：</strong>未实现，<code>BOARD_UART_DMA</code> 必须为 n。</li>
+    <li><strong>LCD 实际显示：</strong>面板时序在代码层完成，偏移/颜色顺序可能需要按实际批次调整 <code>board_config.h</code> 的 <code>BOARD_LCD_INIT</code>。</li>
+    <li><strong>UART/SPI DMA 与 EXTI：</strong>框架已实现，<code>f407ve-dma</code> 启用；当前未上板验证。</li>
+    <li><strong>SPI 全双工 DMA：</strong>SPI1 的 MISO 与 LCD DC 共用 PA6，只能在 SPI2/SPI3 或修改接线后验证。</li>
+    <li><strong>I2C/ADC/PWM：</strong>已通过 Host 类测试和 GCC 构建；ACK/repeated start、ADC 精度、PWM 波形仍需上板用逻辑分析仪/示波器验证。</li>
+    <li><strong>Fault / IWDG：</strong>代码已编译，Host 无法触发真实异常/看门狗；需上板制造 HardFault、任务失联和 IWDG 超时，确认输出与复位原因。</li>
+    <li><strong>NVM：</strong>Host 用 RAM 假后端覆盖 A/B/CRC/回退；真实 Flash 擦除时序、掉电原子性和扇区边界仍需上板验证。</li>
     <li><strong>Keil AC6：</strong>未适配；工程固定 ARMCC 5.06 update 5。</li>
   </ul>
 
@@ -1554,29 +1607,38 @@ python src/tests/hil/test_protocol.py --port COM7 --stats</code></pre>
         <tr><td><code>src/framework/core/fw_dev.c</code></td><td>静态注册表、路径归一化、引用计数、分发</td></tr>
         <tr><td><code>src/framework/core/fw_pin.c</code></td><td>pin 类：多引脚读写、模式配置</td></tr>
         <tr><td><code>src/framework/core/fw_serial.c</code></td><td>serial 类：ring、read/write/ioctl、ISR 事件</td></tr>
-        <tr><td><code>src/framework/core/fw_spi.c</code></td><td>SPI 类：配置与同步传输转发</td></tr>
+        <tr><td><code>src/framework/core/fw_spi.c</code></td><td>SPI 类：配置、同步传输、async/wait/abort busy 状态机</td></tr>
+        <tr><td><code>src/framework/core/fw_i2c.c</code></td><td>I2C 类：地址/长度校验、transfer/mem/probe</td></tr>
+        <tr><td><code>src/framework/core/fw_adc.c</code></td><td>ADC 类：通道采样与 mV 换算</td></tr>
+        <tr><td><code>src/framework/core/fw_pwm.c</code></td><td>PWM 类：频率、千分比占空比、启停</td></tr>
         <tr><td><code>src/framework/core/fw_display.c</code></td><td>display 类：裁剪、分块填充、位图</td></tr>
         <tr><td><code>src/framework/components/protocol/fw_protocol.c</code></td><td>CRC-16 与逐字节组帧</td></tr>
         <tr><td><code>src/framework/components/display/st7735s.c</code></td><td>ST7735S 命令序列与像素搬运</td></tr>
         <tr><td><code>src/app/rpc/app_rpc.c</code></td><td>命令表、TX 泵、周期上报、半帧超时</td></tr>
         <tr><td><code>src/platform/stm32f407/drv_serial.c</code></td><td>UART 实例、HAL、IRQ、事件</td></tr>
         <tr><td><code>src/platform/stm32f407/drv_pin.c</code></td><td>单 pin 设备与 GPIO 表查表</td></tr>
-        <tr><td><code>src/platform/stm32f407/drv_spi.c</code></td><td>SPI 实例、引脚复用、分频</td></tr>
+        <tr><td><code>src/platform/stm32f407/drv_spi.c</code></td><td>SPI 实例、引脚复用、分频、DMA/信号量/错误回调</td></tr>
+        <tr><td><code>src/platform/stm32f407/drv_i2c.c</code></td><td>I2C 主模式阻塞、mem_read/write、probe</td></tr>
+        <tr><td><code>src/platform/stm32f407/drv_adc.c</code></td><td>ADC1 通道配置与轮询采样</td></tr>
+        <tr><td><code>src/platform/stm32f407/drv_pwm.c</code></td><td>TIM4 PSC/ARR、四路 PWM、占空比</td></tr>
         <tr><td><code>src/platform/stm32f407/stm32f407_pin_map.h</code></td><td>端口/引脚/IRQ/实例映射表</td></tr>
         <tr><td><code>src/platform/stm32f407/stm32f407_boot.c</code></td><td>HAL/时钟/SysTick/heap/复位原因</td></tr>
-        <tr><td><code>src/platform/stm32f407/stm32f407_console.c</code></td><td>控制台轮询/入队双模式</td></tr>
+        <tr><td><code>src/platform/stm32f407/stm32f407_console.c</code></td><td>控制台轮询/入队双模式 + panic 直写</td></tr>
         <tr><td><code>src/platform/stm32f407/stm32f407_irq.c</code></td><td>SysTick + CPU 采样</td></tr>
-        <tr><td><code>src/platform/stm32f407/stm32f407_panic.c</code></td><td>panic 现场</td></tr>
-        <tr><td><code>src/platform/board/stm32f407ve/board.c</code></td><td>薄组合根：boot → devices → components</td></tr>
-        <tr><td><code>src/platform/board/stm32f407ve/board_clock.c</code></td><td>HSI/HSE 板级时钟描述</td></tr>
-        <tr><td><code>src/platform/board/stm32f407ve/board_pins.c</code></td><td>串口/SPI 描述符与引脚/AF 校验</td></tr>
-        <tr><td><code>src/platform/board/stm32f407ve/board_devices.c</code></td><td>注册顺序、LED/LCD、console 绑定</td></tr>
-        <tr><td><code>src/platform/board/stm32f407ve/link.lds</code></td><td>GCC 链接脚本，包含 board_memory.ld</td></tr>
+        <tr><td><code>src/platform/stm32f407/stm32f407_fault.c</code></td><td>HardFault 钩子 + 其余 fault 入口 + 现场 dump</td></tr>
+        <tr><td><code>src/platform/stm32f407/stm32f407_iwdg.c</code></td><td>IWDG 启动/喂狗</td></tr>
+        <tr><td><code>src/platform/stm32f407/stm32f407_nvm.c</code></td><td>参数存储 Flash 后端（擦除/编程/读取）</td></tr>
+        <tr><td><code>src/platform/stm32f407/stm32f407_panic.c</code></td><td>panic file:line + 可选复位</td></tr>
+        <tr><td><code>src/framework/core/fw_log.c</code></td><td>分级日志与 sink</td></tr>
+        <tr><td><code>src/framework/core/fw_param.c</code></td><td>A/B 参数槽、CRC32、掉电回退</td></tr>
+        <tr><td><code>src/platform/board/stm32f407ve/board.c</code></td><td>单文件组合根：C 表转换、注册、时钟、校验、LCD/NVM</td></tr>
+        <tr><td><code>src/platform/board/stm32f407ve/board_config.h</code></td><td>手写接线事实源：引脚/AF/通道/DMA/内存/NVM/LCD</td></tr>
+        <tr><td><code>src/platform/board/stm32f407ve/link.lds</code></td><td>GCC 链接脚本，内联 Flash 代码区/NVM/RAM/CCM/最小栈</td></tr>
         <tr><td><code>profiles/</code></td><td>唯一配置源与生成物</td></tr>
         <tr><td><code>project/sources.json</code></td><td>CMake/Keil 共用源文件清单</td></tr>
         <tr><td><code>tools/fwconfig.py</code></td><td>profile 管理、检查、Keil 生成入口</td></tr>
         <tr><td><code>tools/genconfig.py</code></td><td>.config → 头文件/CMake 片段 + 校验</td></tr>
-        <tr><td><code>tools/gen_keil.py</code></td><td>manifest → uVision 工程</td></tr>
+        <tr><td><code>tools/gen_keil.py</code></td><td>sources.json + board_config.h → uVision 工程</td></tr>
         <tr><td><code>src/tests/host/</code></td><td>Host 假设备与单元测试</td></tr>
         <tr><td><code>src/tests/hil/test_protocol.py</code></td><td>串口协议 HIL 冒烟测试</td></tr>
         <tr><td><code>keil/</code></td><td>AC5 模板、生成工程、启动文件、scatter</td></tr>
@@ -1586,7 +1648,7 @@ python src/tests/hil/test_protocol.py --port COM7 --stats</code></pre>
 
   <div class="callout">
     <span class="callout__label">建议的下一步</span>
-    <p>上板烧录 → 运行 HIL → 观察 LCD 偏移/颜色 → 再决定是否做 UART DMA。不要在没有硬件反馈的情况下继续堆功能。</p>
+    <p>上板烧录 → 运行 HIL → 观察 LCD 偏移/颜色 → 用 <code>f407ve-dma</code> 验证 UART DMA 与 SPI1 TX DMA，再用 SPI2 做全双工回环；随后用逻辑分析仪验证 I2C1 的 ACK/repeated start，用示波器验证 PWM4 频率/占空比，并给 ADC1 输入已知电压。不要在没有硬件反馈的情况下继续堆功能。</p>
   </div>
 </section>
 

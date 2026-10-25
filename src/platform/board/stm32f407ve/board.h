@@ -51,12 +51,22 @@ bool board_led_active_high(void);
 /* 返回 LCD 对象；未启用或未初始化时返回 NULL。 */
 fw_display_t *board_lcd(void);
 
-/* 板卡名称/版本，来自 Kconfig.board。 */
+/* 板卡名称/版本，来自 board_config.h。 */
 const char *board_name(void);
 const char *board_version(void);
 
 /* 上一次复位原因位图及可读名称。 */
 uint32_t board_reset_cause(void);
 const char *board_reset_cause_name(uint32_t cause);
+
+/*
+ * 看门狗。
+ *
+ * board_watchdog_start 在所有设备/任务就绪后调用；未启用时返回 FW_OK 且
+ * feed 为 no-op。启用后不可停止，main 必须在健康检查通过时周期喂狗。
+ */
+bool board_watchdog_enabled(void);
+fw_status_t board_watchdog_start(void);
+void board_watchdog_feed(void);
 
 #endif

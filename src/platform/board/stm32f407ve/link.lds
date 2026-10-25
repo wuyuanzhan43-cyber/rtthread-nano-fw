@@ -1,11 +1,26 @@
 /*
  * v2 STM32F407VE 链接脚本（GNU ld）
  *
+ * 这个文件是 GCC 侧的内存事实，与 board_config.h 的 BOARD_*_ORIGIN/
+ * SIZE_KB 必须完全一致。两者无法共享 C 宏，因此由
+ * tools/tests/test_static_board.py 做文本交叉校验：
+ *   - FLASH 的 LENGTH = BOARD_CODE_FLASH_SIZE_KB；
+ *   - NVM/RAM/CCM 的 ORIGIN/LENGTH = board_config.h 对应常量；
+ *   - _Min_Stack_Size = BOARD_MIN_STACK_SIZE。
+ * 只改一边会被 Host CTest 立即拒绝。
+ *
  * 存储器：
- *   FLASH 512KB @ 0x08000000 - 中断向量、代码、只读数据、.data 初值；
- *   RAM   128KB @ 0x20000000 - .data、.bss、主栈/中断栈、RT-Thread 静态对象；
- *   CCM    64KB @ 0x10000000 - 故意不使用：DMA 无法访问 CCM，
- *                              为了保持所有缓冲区一致可 DMA，统一放主 SRAM。
+ *   FLASH 256KB @ 0x08000000 - 中断向量、代码、只读数据、.data 初值。
+ *                    注意不是芯片总 Flash 512KB：尾部 256KB 留给 NVM，
+ *                    绝不能链接进固件，否则参数区会被代码覆盖。
+ *   NVM   256KB @ 0x08040000 - 参数 A/B 槽（各 128KB 扇区）。
+ *                    这里声明为 MEMORY 区域只是为了让 map 文件可见；
+ *                    SECTIONS 中没有任何段使用它，固件也不会写入。
+ *   RAM   128KB @ 0x20000000 - .data、.bss、主栈/中断栈、RT-Thread
+ *                    静态对象和所有 DMA 缓冲区。
+ *   CCM    64KB @ 0x10000000 - 故意不使用：F407 的 DMA 不能访问 CCM。
+ *                    为了保持“所有缓冲区都可 DMA”的一致规则，统一
+ *                    放主 SRAM；当前 CCM 只出现在 map 中，Used=0。
  *
  * 符号约定（启动文件/RT-Thread 会引用）：
  *   _estack       - 栈顶（RAM 末尾），复位时装入 MSP；
@@ -13,23 +28,35 @@
  *   _sdata/_edata - .data 在 RAM 中的起止；
  *   _sbss/_ebss   - .bss 起止；
  *   end/_end      - 堆起点（RT_USING_HEAP 时由 platform boot 使用）。
+ *
+ * 修改板级内存布局时：
+ *   1. 改 board_config.h 的 BOARD_*_ORIGIN/SIZE_KB；
+ *   2. 改本文件 MEMORY 与 _Min_Stack_Size；
+ *   3. 运行 python tools/fwconfig.py gen-keil --profile <name>
+ *      （Keil IROM/IRAM/Stack 自动派生）；
+ *   4. 运行 Host CTest，确认静态板级一致性测试通过。
  */
 ENTRY(Reset_Handler)
 
-/* 区域大小/起始地址来自 Kconfig.board，由 genconfig.py 生成。 */
-INCLUDE board_memory.ld
-
 MEMORY {
-    FLASH (rx)  : ORIGIN = BOARD_FLASH_ORIGIN, LENGTH = BOARD_FLASH_LENGTH
-    RAM   (xrw) : ORIGIN = BOARD_RAM_ORIGIN,   LENGTH = BOARD_RAM_LENGTH
-    CCM   (rw)  : ORIGIN = BOARD_CCM_ORIGIN,   LENGTH = BOARD_CCM_LENGTH
+    /*
+     * FLASH 只覆盖代码区。NVM 从 0x08040000 开始，和 FLASH 区域
+     * 首尾相接但不重叠。
+     */
+    FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 256K
+    /* 参数区：只声明、不分配段；stm32f407_nvm.c 用绝对地址访问。 */
+    NVM   (r)   : ORIGIN = 0x08040000, LENGTH = 256K
+    /* 主 SRAM：可执行/可读写；DMA 只能访问这里，不能访问 CCM。 */
+    RAM   (xrw) : ORIGIN = 0x20000000, LENGTH = 128K
+    /* CCM：当前不链接任何段；保留声明便于以后放非 DMA 数据。 */
+    CCM   (rw)  : ORIGIN = 0x10000000, LENGTH = 64K
 }
 
 /* 栈顶：RAM 最高地址，向下增长。 */
 _estack = ORIGIN(RAM) + LENGTH(RAM);
 
-/* 主栈/中断栈预留，来自 BOARD_MIN_STACK_SIZE。 */
-_Min_Stack_Size = BOARD_MIN_STACK_SIZE;
+/* 主栈/中断栈预留，对应 board_config.h 的 BOARD_MIN_STACK_SIZE。 */
+_Min_Stack_Size = 4096;
 
 SECTIONS {
     /*

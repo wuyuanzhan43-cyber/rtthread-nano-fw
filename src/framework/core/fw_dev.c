@@ -256,3 +256,18 @@ int fw_dev_isr(fw_dev_t *dev, int event, void *args)
         return FW_ENOTSUP;
     return dev->ops->isr(dev, event, args);
 }
+
+/*
+ * 记录一次设备错误。
+ *
+ * 只增计数，不改变设备状态；调用者负责决定是否重试/恢复。
+ */
+void fw_dev_note_error(fw_dev_t *dev)
+{
+    if (dev != NULL) ++dev->error_count;
+}
+
+uint32_t fw_dev_error_count(const fw_dev_t *dev)
+{
+    return dev != NULL ? dev->error_count : 0U;
+}

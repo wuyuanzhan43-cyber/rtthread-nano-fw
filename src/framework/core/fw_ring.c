@@ -91,6 +91,29 @@ size_t fw_ring_read(fw_ring_t *ring, uint8_t *data, size_t capacity)
 }
 
 /*
+ * 丢弃未读数据。
+ *
+ * 与 read 的区别：
+ *   - read 把数据复制到调用者缓冲并移动 tail；
+ *   - discard 只移动 tail/count，不访问 storage 内容。
+ *
+ * 典型用途：DMA 发送完成回调已经确认 staging 块被硬件发出，
+ * 此时只需要把 ring 中对应字节“消费掉”，不需要再次读取数据。
+ * 调用者仍必须保证与生产者互斥（serial 类通过 lock/unlock 完成）。
+ */
+size_t fw_ring_discard(fw_ring_t *ring, size_t length)
+{
+    size_t done;
+
+    if (ring == NULL || ring->storage == NULL || ring->capacity == 0U)
+        return 0U;
+    done = length < ring->count ? length : ring->count;
+    ring->tail = (ring->tail + done) % ring->capacity;
+    ring->count -= done;
+    return done;
+}
+
+/*
  * 只读预览。
  *
  * 从 tail 开始按逻辑顺序复制，但不修改任何索引：

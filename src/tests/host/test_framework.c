@@ -13,6 +13,7 @@
  */
 #include "test_common.h"
 #include "fw/dev.h"
+#include "fw/log.h"
 #include "fw/ring.h"
 #include "fw/serial.h"
 #include "fw/pin.h"
@@ -93,7 +94,7 @@ static void test_protocol(void)
  * 设备注册表测试。
  *
  * 覆盖：
- *   - 注册 3 个假设备后 count==3；
+ *   - 注册 7 个假设备后 count==7；
  *   - "serial1" 与 "/dev/pin" 两种路径写法都能找到；
  *   - 类型化查找会拒绝类型不匹配；
  *   - open/close 的引用计数；
@@ -110,11 +111,15 @@ static void test_device_registry(void)
     host_init(&host);
     host_register_devices(&host);
 
-    CHECK(fw_dev_count() == 3U);
+    CHECK(fw_dev_count() == 7U);
     found = fw_dev_find("serial1");
     CHECK(found != NULL && found->type == FW_DEV_TYPE_SERIAL);
     CHECK(fw_dev_find("/dev/pin") != NULL);
     CHECK(fw_dev_find("/dev/lcd") != NULL);
+    CHECK(fw_dev_find("/dev/spi1") != NULL);
+    CHECK(fw_dev_find("/dev/i2c1") != NULL);
+    CHECK(fw_dev_find("/dev/adc1") != NULL);
+    CHECK(fw_dev_find("/dev/pwm4") != NULL);
     CHECK(fw_dev_find("missing") == NULL);
     CHECK(fw_serial_find("serial1") != NULL);
     CHECK(fw_serial_find("pin") == NULL);
@@ -132,7 +137,7 @@ static void test_device_registry(void)
         fw_dev_t conflict;
         CHECK(fw_dev_register(&conflict, "pin", FW_DEV_TYPE_PIN, &dummy) == FW_EEXIST);
     }
-    CHECK(fw_dev_count() == 4U);
+    CHECK(fw_dev_count() == 8U);
 
     CHECK(strcmp(fw_status_name(FW_EBUSY), "EBUSY") == 0);
 }
@@ -226,6 +231,46 @@ static void test_display(void)
     CHECK(host.backlight);
 }
 
+/* fw_log：级别过滤、格式化和换行。 */
+static char s_log_buffer[256];
+
+static void test_log_sink(const char *line)
+{
+    size_t used = strlen(s_log_buffer);
+    size_t room = sizeof(s_log_buffer) - used - 1U;
+    if (room == 0U) return;
+    strncat(s_log_buffer, line, room);
+}
+
+static void test_log(void)
+{
+    memset(s_log_buffer, 0, sizeof(s_log_buffer));
+    fw_log_set_sink(test_log_sink);
+    fw_log_set_level(FW_LOG_INFO);
+
+    FW_LOGI("t", "hello %d", 5);
+    CHECK(strstr(s_log_buffer, "[I] t: hello 5") != NULL);
+    CHECK(strchr(s_log_buffer, '\n') != NULL);
+
+    /* 运行期降级到 ERROR 后，INFO/WARN 不输出。 */
+    memset(s_log_buffer, 0, sizeof(s_log_buffer));
+    fw_log_set_level(FW_LOG_ERROR);
+    FW_LOGW("t", "hidden");
+    FW_LOGI("t", "hidden");
+    CHECK(s_log_buffer[0] == '\0');
+    FW_LOGE("t", "visible");
+    CHECK(strstr(s_log_buffer, "[E] t: visible") != NULL);
+
+    /* DEBUG 超过编译期上限（FW_LOG_LEVEL=3）时被抑制。 */
+    memset(s_log_buffer, 0, sizeof(s_log_buffer));
+    fw_log_set_level(FW_LOG_DEBUG);
+    fw_log_printf(FW_LOG_DEBUG, "t", "debug");
+    CHECK(s_log_buffer[0] == '\0');
+
+    fw_log_set_sink(NULL);
+    fw_log_set_level(FW_LOG_INFO);
+}
+
 /* 运行 framework 全部测试。 */
 void test_framework_run(void)
 {
@@ -234,4 +279,5 @@ void test_framework_run(void)
     test_device_registry();
     test_serial_pin();
     test_display();
+    test_log();
 }

@@ -21,8 +21,13 @@
     "src/framework/core/fw_serial.c",
     "src/framework/core/fw_pin.c",
     "src/framework/core/fw_spi.c",
+    "src/framework/core/fw_i2c.c",
+    "src/framework/core/fw_adc.c",
+    "src/framework/core/fw_pwm.c",
     "src/framework/core/fw_display.c",
     "src/framework/core/fw_clock.c",
+    "src/framework/core/fw_log.c",
+    "src/framework/core/fw_param.c",
     "src/framework/core/fw_ring.c",
     "src/framework/core/fw_status.c"
   ],
@@ -44,6 +49,7 @@
   ],
   "rtport_sources": [
     "src/framework/port/rtthread/rtthread_clock.c",
+    "src/framework/port/rtthread/rtthread_log.c",
     "src/framework/port/rtthread/rtthread_task.c"
   ],
   "main_sources": [
@@ -55,26 +61,34 @@
     "src/tests/host/test_framework.c",
     "src/tests/host/test_task.c",
     "src/tests/host/test_app_rpc.c",
+    "src/tests/host/test_peripherals.c",
+    "src/tests/host/test_ext_peripherals.c",
+    "src/tests/host/test_param.c",
+    "src/tests/host/test_board_config.c",
     "src/tests/host/host_devices.c",
     "src/tests/host/host_tasks.c"
   ],
   "bsp_sources": [
     "src/platform/stm32f407/drv_common.c",
+    "src/platform/stm32f407/drv_dma.c",
     "src/platform/stm32f407/drv_pin.c",
     "src/platform/stm32f407/drv_serial.c",
     "src/platform/stm32f407/drv_spi.c",
+    "src/platform/stm32f407/drv_i2c.c",
+    "src/platform/stm32f407/drv_adc.c",
+    "src/platform/stm32f407/drv_pwm.c",
     "src/platform/stm32f407/stm32f407_map.c",
     "src/platform/stm32f407/stm32f407_clock.c",
     "src/platform/stm32f407/stm32f407_boot.c",
     "src/platform/stm32f407/stm32f407_irq.c",
     "src/platform/stm32f407/stm32f407_console.c",
+    "src/platform/stm32f407/stm32f407_fault.c",
+    "src/platform/stm32f407/stm32f407_iwdg.c",
+    "src/platform/stm32f407/stm32f407_nvm.c",
     "src/platform/stm32f407/stm32f407_panic.c"
   ],
   "board_sources": [
-    "src/platform/board/stm32f407ve/board.c",
-    "src/platform/board/stm32f407ve/board_devices.c",
-    "src/platform/board/stm32f407ve/board_clock.c",
-    "src/platform/board/stm32f407ve/board_pins.c"
+    "src/platform/board/stm32f407ve/board.c"
   ],
   "rtt_common_sources": [
     "src/vendor/rt-thread-nano/src/clock.c",
@@ -115,6 +129,13 @@
     "src/third_party/stm32f4/hal/Src/stm32f4xx_hal_rcc_ex.c",
     "src/third_party/stm32f4/hal/Src/stm32f4xx_hal_spi.c",
     "src/third_party/stm32f4/hal/Src/stm32f4xx_hal_uart.c",
+    "src/third_party/stm32f4/hal/Src/stm32f4xx_hal_i2c.c",
+    "src/third_party/stm32f4/hal/Src/stm32f4xx_hal_i2c_ex.c",
+    "src/third_party/stm32f4/hal/Src/stm32f4xx_hal_adc.c",
+    "src/third_party/stm32f4/hal/Src/stm32f4xx_hal_adc_ex.c",
+    "src/third_party/stm32f4/hal/Src/stm32f4xx_hal_tim.c",
+    "src/third_party/stm32f4/hal/Src/stm32f4xx_hal_tim_ex.c",
+    "src/third_party/stm32f4/hal/Src/stm32f4xx_hal_iwdg.c",
     "src/third_party/stm32f4/device/Source/Templates/system_stm32f4xx.c"
   ],
   "gcc_startup": [

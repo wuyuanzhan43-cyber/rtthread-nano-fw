@@ -64,13 +64,18 @@ void HAL_IncTick(void)
 /*
  * 读取 HAL 毫秒计数。
  *
- * 如果 SysTick 的 COUNTFLAG 置位（表示自上次读取以来至少溢出一次），
- * 主动补一次递增，避免在中断被长时间关闭时 uwTick 落后。
- * 读取 COUNTFLAG 会清除该标志。
+ * 启动阶段 rtthread_startup() 在 rt_hw_board_init() 之前就关闭了可屏蔽中断，
+ * 此时 SysTick 中断不会执行，uwTick 只能靠这里读取 COUNTFLAG 补偿；
+ * 调度器启动后，SysTick_Handler 已经负责累加，这里不能再补，
+ * 否则每次回绕会被计入两次，HAL 阻塞超时会以约 2 倍速度到期。
+ *
+ * 因此只有 PRIMASK 置位（中断被屏蔽、ISR 不会运行）时才做补偿。
+ * 读取 CTRL 会顺带清除 COUNTFLAG。
  */
 uint32_t HAL_GetTick(void)
 {
-    if ((SysTick->CTRL & SysTick_CTRL_COUNTFLAG_Msk) != 0U) {
+    if ((__get_PRIMASK() != 0U) &&
+        ((SysTick->CTRL & SysTick_CTRL_COUNTFLAG_Msk) != 0U)) {
         HAL_IncTick();
     }
     return uwTick;
@@ -181,4 +186,10 @@ fw_status_t drv_status_from_hal(HAL_StatusTypeDef status)
     case HAL_TIMEOUT: return FW_ETIMEOUT;
     default: return FW_EIO;
     }
+}
+
+uint32_t drv_timeout_to_hal(uint32_t timeout_ms)
+{
+    if (timeout_ms == FW_WAIT_FOREVER) return HAL_MAX_DELAY;
+    return timeout_ms == 0U ? 1U : timeout_ms;
 }

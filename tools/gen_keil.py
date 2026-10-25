@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
 import re
 import sys
@@ -28,6 +29,7 @@ TEMPLATE = ROOT / "keil" / "project_template.uvprojx"
 DEFAULT_OUTPUT = ROOT / "keil" / "stm32f407ve.uvprojx"
 SCATTER_TEMPLATE = ROOT / "keil" / "scatter_template.sct"
 DEFAULT_SCATTER = ROOT / "keil" / "stm32f407ve.sct"
+STARTUP = ROOT / "keil" / "startup_stm32f407xx.s"
 
 # uVision 工程里的路径分隔符。
 BS = "\\"
@@ -94,7 +96,104 @@ def group_xml(name: str, sources: list[str]) -> list[str]:
     return lines
 
 
-def render(manifest: dict, profile: str) -> str:
+BOARD_CONFIG = ROOT / "src" / "platform" / "board" / "stm32f407ve" / "board_config.h"
+
+
+def _header_defines(path: pathlib.Path) -> dict[str, str]:
+    """解析 C 头中的一行式 `#define NAME value`。
+
+    board_config.h 的常量保持简单字面量（整数/十六进制/字符串），
+    避免表达式让 Keil 生成器需要实现 C 预处理器。
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise SystemExit(f"gen_keil: missing {_display_path(path)}")
+    defines: dict[str, str] = {}
+    for match in re.finditer(
+            r'^#define\s+([A-Z0-9_]+)\s+'
+            r'(0x[0-9A-Fa-f]+[uUlL]*|\d+[uUlL]*|"[^"]*")\s*(?:/\*.*)?$',
+            text, flags=re.M):
+        defines[match.group(1)] = match.group(2)
+    return defines
+
+
+def _header_int(defines: dict[str, str], name: str) -> int:
+    try:
+        return int(defines[name].rstrip("uUlL"), 0)
+    except KeyError:
+        raise SystemExit(f"gen_keil: board_config.h is missing {name}")
+
+
+def _header_str(defines: dict[str, str], name: str) -> str:
+    try:
+        return defines[name].strip('"')
+    except KeyError:
+        raise SystemExit(f"gen_keil: board_config.h is missing {name}")
+
+
+def _keil_info(profile: str) -> dict:
+    """从手写 board_config.h + 生成的 board_policy.h 计算 Keil 参数。
+
+    内存以 board_config.h 为准；CLOCK 只看策略头里的时钟源选择。
+    """
+    board = _header_defines(BOARD_CONFIG)
+    policy_path = ROOT / "profiles" / profile / "generated" / "board_policy.h"
+    policy = _header_defines(policy_path)
+
+    device = _header_str(board, "BOARD_KEIL_DEVICE")
+    vendor = _header_str(board, "BOARD_KEIL_VENDOR")
+    algorithm = _header_str(board, "BOARD_KEIL_FLASH_ALGO")
+    board_id = _header_str(board, "BOARD_NAME").lower()
+
+    flash_origin = _header_int(board, "BOARD_FLASH_ORIGIN")
+    # 代码区 = 总 Flash - NVM；下载/擦除范围必须停在 NVM 之前。
+    code_kb = _header_int(board, "BOARD_CODE_FLASH_SIZE_KB")
+    flash_size = code_kb * 1024
+    ram_origin = _header_int(board, "BOARD_RAM_ORIGIN")
+    ram_size = _header_int(board, "BOARD_RAM_SIZE_KB") * 1024
+
+    hse = int(policy.get("BOARD_CLOCK_HSE_8_168", "0"), 0) != 0
+    sysclk_hz = 168000000 if hse else 16000000
+
+    family_match = re.match(r"(STM32[A-Z]\d{3})", device)
+    family = family_match.group(1) if family_match else device
+
+    return {
+        "board_id": board_id,
+        "device": device,
+        "vendor": vendor,
+        "cpu": (f'IRAM(0x{ram_origin:08X},0x{ram_size:08X}) '
+                f'IROM(0x{flash_origin:08X},0x{flash_size:08X}) '
+                f'CPUTYPE("Cortex-M4") FPU2 CLOCK({sysclk_hz}) ELITTLE'),
+        "flash_dll": (
+            f"UL2CM3(-S0 -C0 -P0 -FD{ram_origin:08X} -FC1000 -FN1 "
+            f"-FF0{algorithm} -FS{flash_origin:08X} -FL{flash_size:06X} "
+            f"-FP0($$Device:{device}$Flash\\{algorithm}.FLM))"),
+        "register_file": (
+            f"$$Device:{device}$Drivers\\CMSIS\\Device\\ST\\STM32F4xx\\Include\\"
+            "stm32f4xx.h"),
+        "svd_file": f"$$Device:{device}$CMSIS\\SVD\\{family}.svd",
+        "flash_origin": f"0x{flash_origin:08X}",
+        "flash_origin_bare": f"{flash_origin:X}",
+        "flash_size": f"0x{flash_size:08X}",
+        "flash_size_bare": f"{flash_size:X}",
+        "ram_origin": f"0x{ram_origin:08X}",
+        "ram_size": f"0x{ram_size:08X}",
+        "ram_size_bare": f"{ram_size:X}",
+        "sysclk_hz": sysclk_hz,
+    }
+
+
+def _display_path(path: pathlib.Path) -> str:
+    try:
+        return str(path.resolve().relative_to(ROOT))
+    except ValueError:
+        return str(path.resolve())
+
+
+def render(manifest: dict, profile: str, keil_info: dict,
+           scatter_name: str) -> str:
     """根据 manifest 和模板渲染完整 uvprojx 文本。
 
     分组映射与 CMake 目标大致对应，但 Keil 需要把“同一目录下的源文件”
@@ -133,8 +232,8 @@ def render(manifest: dict, profile: str) -> str:
     lines.append("      </Groups>")
     groups_xml = "\n".join(lines)
 
-    # generated 目录必须排在最前：rtconfig.h / board_config.h 会被
-    # vendor/chip 头文件按名字包含，搜索顺序不能变。
+    # generated 目录必须排在最前：rtconfig.h / board_policy.h 会被
+    # 板级与平台头按名字包含，搜索顺序不能变。
     include_paths = ["profiles/" + profile + "/generated"]
     include_paths += list_value(manifest, "includes")
     include_paths += list_value(manifest, "target_includes")
@@ -158,31 +257,62 @@ def render(manifest: dict, profile: str) -> str:
     if count != 1:
         raise SystemExit("template has no C define section")
 
+    replacements = {
+        "@DEVICE@": keil_info["device"],
+        "@VENDOR@": keil_info["vendor"],
+        "@CPU@": keil_info["cpu"],
+        "@FLASH_DLL@": keil_info["flash_dll"],
+        "@REGISTER_FILE@": keil_info["register_file"],
+        "@SVD_FILE@": keil_info["svd_file"],
+        "@FLASH_ORIGIN@": keil_info["flash_origin"],
+        "@RAM_ORIGIN@": keil_info["ram_origin"],
+        "@FLASH_SIZE@": keil_info["flash_size"],
+        "@RAM_SIZE@": keil_info["ram_size"],
+        "@FLASH_ORIGIN_BARE@": keil_info["flash_origin_bare"],
+        "@FLASH_SIZE_BARE@": keil_info["flash_size_bare"],
+        "@RAM_SIZE_BARE@": keil_info["ram_size_bare"],
+        "@SCATTER_NAME@": scatter_name,
+        "@BOARD_ID@": keil_info["board_id"],
+    }
+    for key, value in replacements.items():
+        text = text.replace(key, str(value))
+    leftover = re.findall(r"@[A-Z0-9_]+@", text)
+    if leftover:
+        raise SystemExit(f"template placeholders not replaced: {sorted(set(leftover))}")
     return text
 
 
-def _board_memory_value(text: str, name: str) -> int:
-    """从生成的 board_config.h 读取整型 BOARD_* 值。"""
-    match = re.search(rf"#define\s+{name}\s+(\d+)", text)
-    if match is None:
-        raise SystemExit(f"gen_keil: board_config.h is missing {name}")
-    return int(match.group(1))
-
-
-def render_scatter(profile: str) -> str:
-    """用 board_config.h 的 FLASH/RAM 大小渲染 Keil scatter。"""
-    config = ROOT / "profiles" / profile / "generated" / "board_config.h"
-    try:
-        text = config.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        raise SystemExit(f"gen_keil: missing {config.relative_to(ROOT)}")
-
-    flash_bytes = _board_memory_value(text, "BOARD_FLASH_SIZE_KB") * 1024
-    ram_bytes = _board_memory_value(text, "BOARD_RAM_SIZE_KB") * 1024
+def render_scatter(keil_info: dict) -> str:
+    """用 board_config.h 计算出的地址和大小渲染 Keil scatter。"""
     template = SCATTER_TEMPLATE.read_text(encoding="utf-8")
     return (template
-            .replace("@FLASH_SIZE@", f"0x{flash_bytes:08X}")
-            .replace("@RAM_SIZE@", f"0x{ram_bytes:08X}"))
+            .replace("@FLASH_ORIGIN@", str(keil_info["flash_origin"]))
+            .replace("@RAM_ORIGIN@", str(keil_info["ram_origin"]))
+            .replace("@FLASH_SIZE@", str(keil_info["flash_size"]))
+            .replace("@RAM_SIZE@", str(keil_info["ram_size"])))
+
+
+def render_startup() -> bytes:
+    """把 board_config.h 的 BOARD_MIN_STACK_SIZE 同步到 Keil 启动文件。
+
+    只替换 Stack_Size 一行，并保留原文件的 CRLF/LF，避免整文件行尾变化。
+    """
+    stack_size = _header_int(_header_defines(BOARD_CONFIG),
+                             "BOARD_MIN_STACK_SIZE")
+    try:
+        raw = STARTUP.read_bytes()
+    except FileNotFoundError:
+        raise SystemExit(f"gen_keil: missing {STARTUP.relative_to(ROOT)}")
+
+    pattern = rb"(?m)^(\s*Stack_Size\s+EQU\s+)0x[0-9A-Fa-f]+"
+    rendered, count = re.subn(
+        pattern,
+        lambda match: match.group(1) + f"0x{stack_size:08X}".encode("ascii"),
+        raw,
+        count=1)
+    if count != 1:
+        raise SystemExit("gen_keil: startup has no Stack_Size EQU line")
+    return rendered
 
 
 def main(argv: list[str]) -> int:
@@ -195,27 +325,49 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", default="f407ve")
     parser.add_argument("--check", action="store_true")
-    parser.add_argument("--output", default=str(DEFAULT_OUTPUT))
+    parser.add_argument("--output", default=None,
+                        help="uvprojx 输出路径；默认按 profile 派生")
     args = parser.parse_args(argv)
 
-    expected = render(load_manifest(), args.profile)
-    scatter = render_scatter(args.profile)
-    output = pathlib.Path(args.output)
-    scatter_output = DEFAULT_SCATTER
+    if args.profile == "f407ve":
+        suffix = ""
+    elif args.profile.startswith("f407ve-"):
+        suffix = "-" + args.profile[len("f407ve-"):]
+    else:
+        suffix = "-" + args.profile
+    default_output = ROOT / "keil" / f"stm32f407ve{suffix}.uvprojx"
+    scatter_output = ROOT / "keil" / f"stm32f407ve{suffix}.sct"
+    output = pathlib.Path(args.output) if args.output else default_output
+
+    keil_info = _keil_info(args.profile)
+    expected = render(load_manifest(), args.profile, keil_info,
+                      scatter_output.name)
+    scatter = render_scatter(keil_info)
+    startup = render_startup()
 
     if args.check:
         try:
             current = output.read_text(encoding="utf-8-sig")
             current_scatter = scatter_output.read_text(encoding="utf-8-sig")
+            current_startup = STARTUP.read_bytes()
         except FileNotFoundError as error:
             print(f"gen_keil: missing {error.filename}", file=sys.stderr)
             return 1
-        if current != expected:
-            print(f"gen_keil: {output.relative_to(ROOT)} is stale; run tools/gen_keil.py",
+        # uVision 保存工程时可能把 CRLF 改成 LF；内容一致时不应误报
+        # stale，否则用户每次在 GUI 里保存都会让 CTest 失败。
+        def normalize(text: str) -> str:
+            return text.replace("\r\n", "\n")
+
+        if normalize(current) != normalize(expected):
+            print(f"gen_keil: {_display_path(output)} is stale; run tools/gen_keil.py",
                   file=sys.stderr)
             return 1
-        if current_scatter != scatter:
-            print(f"gen_keil: {scatter_output.relative_to(ROOT)} is stale; run tools/gen_keil.py",
+        if normalize(current_scatter) != normalize(scatter):
+            print(f"gen_keil: {_display_path(scatter_output)} is stale; run tools/gen_keil.py",
+                  file=sys.stderr)
+            return 1
+        if current_startup != startup:
+            print(f"gen_keil: {_display_path(STARTUP)} is stale; run tools/gen_keil.py",
                   file=sys.stderr)
             return 1
         print("gen_keil: OK")
@@ -226,7 +378,9 @@ def main(argv: list[str]) -> int:
         handle.write(expected)
     with scatter_output.open("w", encoding="utf-8", newline="\r\n") as handle:
         handle.write(scatter)
-    print(f"gen_keil: wrote {output.relative_to(ROOT)} and {scatter_output.relative_to(ROOT)}")
+    STARTUP.write_bytes(startup)
+    print(f"gen_keil: wrote {_display_path(output)}, "
+          f"{_display_path(scatter_output)}, {_display_path(STARTUP)}")
     return 0
 
 
